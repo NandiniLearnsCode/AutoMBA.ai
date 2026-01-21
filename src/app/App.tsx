@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Brain, LayoutGrid, LineChart, Heart, Bell, Settings } from "lucide-react";
+import { Brain, LayoutGrid, LineChart, Heart, Bell, Settings as SettingsIcon } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/app/components/ui/tabs";
 import { Button } from "@/app/components/ui/button";
 import { Badge } from "@/app/components/ui/badge";
@@ -14,10 +14,12 @@ import { NetworkingLedger } from "@/app/components/NetworkingLedger";
 import { WeeklyStrategy } from "@/app/components/WeeklyStrategy";
 import { ROIDashboard } from "@/app/components/ROIDashboard";
 import { NexusChatbot } from "@/app/components/NexusChatbot";
+import { Settings } from "@/app/components/Settings";
 import { toast } from "sonner";
 
 export default function App() {
   const [viewMode, setViewMode] = useState<"focus" | "strategy" | "recovery">("focus");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [suggestions, setSuggestions] = useState([
     {
       id: "1",
@@ -116,9 +118,18 @@ export default function App() {
               )}
             </Button>
             
-            <Button size="sm" variant="outline">
-              <Settings className="w-4 h-4" />
+            <Button 
+              size="sm" 
+              variant="outline"
+              onClick={() => setSettingsOpen(true)}
+            >
+              <SettingsIcon className="w-4 h-4" />
             </Button>
+            
+            <Settings 
+              open={settingsOpen} 
+              onOpenChange={setSettingsOpen}
+            />
           </div>
         </div>
       </header>
