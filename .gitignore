@@ -46,3 +46,7 @@ calendarcredentials.json
 
 # Vite
 .vite
+
+# Backend server
+server/.env
+server/tokens.json

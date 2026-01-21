@@ -15,12 +15,12 @@ import { WeeklyStrategy } from "@/app/components/WeeklyStrategy";
 import { ROIDashboard } from "@/app/components/ROIDashboard";
 import { NexusChatbot } from "@/app/components/NexusChatbot";
 import { Settings } from "@/app/components/Settings";
-import { useGoogleCalendarAuth } from "@/hooks/useGoogleCalendarAuth";
+import { McpProvider } from "@/contexts/McpContext";
+import { getMcpServerConfigs } from "@/config/mcpServers";
 import { toast } from "sonner";
 
-export default function App() {
-  // Initialize Google Calendar authentication on app load
-  useGoogleCalendarAuth();
+function AppContent() {
+  // Google Calendar authentication is now handled by MCP server (backend)
   
   const [viewMode, setViewMode] = useState<"focus" | "strategy" | "recovery">("focus");
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -258,5 +258,22 @@ export default function App() {
       {/* Nexus Chatbot */}
       <NexusChatbot onScheduleChange={handleScheduleChange} />
     </div>
+  );
+}
+
+// Wrap App with MCP Provider
+export default function App() {
+  const mcpServers = getMcpServerConfigs()
+    .filter((s) => s.enabled && s.url)
+    .map((s) => ({
+      name: s.name,
+      url: s.url,
+      headers: s.headers,
+    }));
+
+  return (
+    <McpProvider servers={mcpServers}>
+      <AppContent />
+    </McpProvider>
   );
 }
