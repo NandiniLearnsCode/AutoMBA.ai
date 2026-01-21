@@ -149,7 +149,7 @@ export async function initializeTokenClient(): Promise<void> {
   return new Promise((resolve) => {
     tokenClient = window.google?.accounts.oauth2.initTokenClient({
       client_id: creds.web.client_id,
-      scope: 'https://www.googleapis.com/auth/calendar.readonly',
+      scope: 'https://www.googleapis.com/auth/calendar',
       callback: (tokenResponse: any) => {
         if (tokenResponse.access_token) {
           accessToken = tokenResponse.access_token;
@@ -264,6 +264,41 @@ function parseCalendarEvent(event: CalendarEvent): ParsedEvent | null {
   }
 }
 
+// Fetch calendar events for a date range
+export async function fetchCalendarEventsRange(startDate: Date, endDate: Date): Promise<ParsedEvent[]> {
+  if (!accessToken) {
+    throw new Error('Not authenticated');
+  }
+  
+  try {
+    const timeMin = startDate.toISOString();
+    const timeMax = endDate.toISOString();
+    
+    const response = await window.gapi?.client.calendar.events.list({
+      calendarId: 'primary',
+      timeMin,
+      timeMax,
+      showDeleted: false,
+      singleEvents: true,
+      orderBy: 'startTime',
+      maxResults: 250,
+    });
+    
+    if (!response || !response.result.items) {
+      return [];
+    }
+    
+    const events = response.result.items
+      .map((event: CalendarEvent) => parseCalendarEvent(event))
+      .filter((event: ParsedEvent | null): event is ParsedEvent => event !== null);
+    
+    return events;
+  } catch (error) {
+    console.error('Error fetching calendar events:', error);
+    throw error;
+  }
+}
+
 // Fetch calendar events for a specific date
 export async function fetchCalendarEvents(date: Date): Promise<ParsedEvent[]> {
   try {
@@ -301,6 +336,138 @@ export async function fetchCalendarEvents(date: Date): Promise<ParsedEvent[]> {
   }
 }
 
+// Create a new calendar event
+export async function createCalendarEvent(event: {
+  summary: string;
+  start: Date;
+  end: Date;
+  description?: string;
+  location?: string;
+}): Promise<string> {
+  try {
+    if (!isAuthenticated()) {
+      await authenticateUser();
+    }
+    
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const eventData = {
+      summary: event.summary,
+      start: {
+        dateTime: event.start.toISOString(),
+        timeZone,
+      },
+      end: {
+        dateTime: event.end.toISOString(),
+        timeZone,
+      },
+      description: event.description || '',
+      location: event.location || '',
+    };
+    
+    const response = await window.gapi?.client.calendar.events.insert({
+      calendarId: 'primary',
+      resource: eventData,
+    });
+    
+    if (!response || !response.result.id) {
+      throw new Error('Failed to create event');
+    }
+    
+    return response.result.id;
+  } catch (error: any) {
+    console.error('Error creating calendar event:', error);
+    throw new Error(error.message || 'Failed to create calendar event');
+  }
+}
+
+// Update an existing calendar event
+export async function updateCalendarEvent(
+  eventId: string,
+  updates: {
+    summary?: string;
+    start?: Date;
+    end?: Date;
+    description?: string;
+    location?: string;
+  }
+): Promise<void> {
+  try {
+    if (!isAuthenticated()) {
+      await authenticateUser();
+    }
+    
+    // First, get the existing event
+    const getResponse = await window.gapi?.client.calendar.events.get({
+      calendarId: 'primary',
+      eventId,
+    });
+    
+    if (!getResponse || !getResponse.result) {
+      throw new Error('Event not found');
+    }
+    
+    const existingEvent = getResponse.result;
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const eventData: any = {
+      summary: updates.summary || existingEvent.summary,
+      description: updates.description !== undefined ? updates.description : existingEvent.description,
+      location: updates.location !== undefined ? updates.location : existingEvent.location,
+    };
+    
+    if (updates.start) {
+      eventData.start = {
+        dateTime: updates.start.toISOString(),
+        timeZone,
+      };
+    } else if (existingEvent.start) {
+      eventData.start = existingEvent.start;
+    }
+    
+    if (updates.end) {
+      eventData.end = {
+        dateTime: updates.end.toISOString(),
+        timeZone,
+      };
+    } else if (existingEvent.end) {
+      eventData.end = existingEvent.end;
+    }
+    
+    await window.gapi?.client.calendar.events.update({
+      calendarId: 'primary',
+      eventId,
+      resource: eventData,
+    });
+  } catch (error: any) {
+    console.error('Error updating calendar event:', error);
+    throw new Error(error.message || 'Failed to update calendar event');
+  }
+}
+
+// Delete a calendar event
+export async function deleteCalendarEvent(eventId: string): Promise<void> {
+  try {
+    if (!isAuthenticated()) {
+      await authenticateUser();
+    }
+    
+    await window.gapi?.client.calendar.events.delete({
+      calendarId: 'primary',
+      eventId,
+    });
+  } catch (error: any) {
+    console.error('Error deleting calendar event:', error);
+    throw new Error(error.message || 'Failed to delete calendar event');
+  }
+}
+
+// Move an event to a new time (wrapper around update)
+export async function moveCalendarEvent(eventId: string, newStart: Date, newEnd: Date): Promise<void> {
+  await updateCalendarEvent(eventId, { start: newStart, end: newEnd });
+}
+
+// Export ParsedEvent type for use in other files
+export type { ParsedEvent };
+
 // Add type declarations for Google APIs
 declare global {
   interface Window {
@@ -313,6 +480,10 @@ declare global {
         calendar: {
           events: {
             list: (params: any) => Promise<any>;
+            get: (params: { calendarId: string; eventId: string }) => Promise<any>;
+            insert: (params: { calendarId: string; resource: any }) => Promise<any>;
+            update: (params: { calendarId: string; eventId: string; resource: any }) => Promise<any>;
+            delete: (params: { calendarId: string; eventId: string }) => Promise<any>;
           };
         };
       };

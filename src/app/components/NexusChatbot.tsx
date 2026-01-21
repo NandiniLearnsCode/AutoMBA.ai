@@ -7,6 +7,17 @@ import { Badge } from "@/app/components/ui/badge";
 import { ScrollArea } from "@/app/components/ui/scroll-area";
 import { motion, AnimatePresence } from "motion/react";
 import { getOpenAIApiKey } from "@/config/apiKey";
+import { 
+  fetchCalendarEvents, 
+  fetchCalendarEventsRange,
+  createCalendarEvent,
+  updateCalendarEvent,
+  deleteCalendarEvent,
+  moveCalendarEvent,
+  isAuthenticated,
+  authenticateUser,
+  type ParsedEvent
+} from "@/services/googleCalendar";
 
 interface Message {
   id: string;
@@ -17,6 +28,7 @@ interface Message {
     type: "move" | "cancel" | "add" | "suggest";
     details: string;
     status: "pending" | "approved" | "rejected";
+    userRequest?: string; // Store the original user request for parsing
     onApprove?: () => void;
     onReject?: () => void;
   };
@@ -60,21 +72,91 @@ export function NexusChatbot({ onScheduleChange }: NexusChatbotProps) {
     }
   }, [isOpen]);
 
-  const callOpenAI = async (userMessage: string, conversationHistory: Array<{role: string, content: string}>): Promise<string> => {
+  // Helper function to parse date range from user input
+  const parseDateRange = (input: string): { start: Date; end: Date } | null => {
+    const lower = input.toLowerCase();
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    if (lower.includes('today')) {
+      const end = new Date(today);
+      end.setHours(23, 59, 59, 999);
+      return { start: today, end };
+    }
+    
+    if (lower.includes('tomorrow')) {
+      const start = new Date(today);
+      start.setDate(start.getDate() + 1);
+      const end = new Date(start);
+      end.setHours(23, 59, 59, 999);
+      return { start, end };
+    }
+    
+    if (lower.includes('this week')) {
+      const start = new Date(today);
+      const dayOfWeek = start.getDay();
+      const diff = start.getDate() - dayOfWeek;
+      start.setDate(diff);
+      
+      const end = new Date(start);
+      end.setDate(end.getDate() + 6);
+      end.setHours(23, 59, 59, 999);
+      return { start, end };
+    }
+    
+    if (lower.includes('next week')) {
+      const start = new Date(today);
+      const dayOfWeek = start.getDay();
+      const diff = start.getDate() - dayOfWeek + 7;
+      start.setDate(diff);
+      start.setHours(0, 0, 0, 0);
+      
+      const end = new Date(start);
+      end.setDate(end.getDate() + 6);
+      end.setHours(23, 59, 59, 999);
+      return { start, end };
+    }
+    
+    return null;
+  };
+
+  // Helper to detect if user wants schedule optimization
+  const isScheduleOptimizationRequest = (input: string): boolean => {
+    const lower = input.toLowerCase();
+    const keywords = ['priority', 'priorities', 'optimize', 'optimization', 'schedule', 'this week', 'next week', 'tomorrow', 'tradeoff', 'trade-off'];
+    return keywords.some(keyword => lower.includes(keyword));
+  };
+
+  const callOpenAI = async (
+    userMessage: string, 
+    conversationHistory: Array<{role: string, content: string}>,
+    calendarContext?: ParsedEvent[]
+  ): Promise<string> => {
     const apiKey = getOpenAIApiKey();
     if (!apiKey) {
       throw new Error("OpenAI API key not found. Please set VITE_OPENAI_API_KEY environment variable.");
     }
 
+    let calendarContextText = '';
+    if (calendarContext && calendarContext.length > 0) {
+      calendarContextText = `\n\nCurrent calendar events for the requested period:\n${calendarContext.map(e => 
+        `- ${e.title} (${e.time}, ${e.duration}min, ${e.type})`
+      ).join('\n')}\n\nUse this calendar information to make informed suggestions. Consider conflicts, priorities, and tradeoffs.`;
+    }
+
     const systemPrompt = `You are the Nexus Executive Agent, an AI assistant helping MBA students optimize their schedule to maximize the Triple Bottom Line: Academic Excellence, Professional Networking, and Personal Well-being.
 
 Your role is to:
-- Help users optimize their schedule, manage conflicts, and make adjustments
-- Provide context-aware suggestions based on their needs
+- Help users optimize their schedule based on their stated priorities
+- Consider tradeoffs when making suggestions (e.g., moving a study session might affect academic performance, but could create space for networking)
+- Analyze calendar conflicts and suggest solutions
+- Provide specific, actionable suggestions (e.g., "I recommend moving [Event X] from [Time A] to [Time B] to accommodate [Priority Y]")
+- When suggesting actions, explain the reasoning and tradeoffs clearly
 - Be concise, professional, and action-oriented
-- When suggesting actions (moving, canceling, adding events), format your response clearly so the user understands what action you're proposing
 
-Respond naturally and helpfully to the user's questions and requests.`;
+${calendarContextText}
+
+When suggesting actions (moving, canceling, adding events), format your response clearly so the user understands what action you're proposing and why it benefits their stated priorities.`;
 
     try {
       const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -157,8 +239,31 @@ Respond naturally and helpfully to the user's questions and requests.`;
           };
         });
 
-      // Call OpenAI API
-      const aiResponse = await callOpenAI(userInput, conversationHistory);
+      // Check if this is a schedule optimization request
+      let calendarEvents: ParsedEvent[] = [];
+      if (isScheduleOptimizationRequest(userInput)) {
+        try {
+          // Ensure authenticated
+          if (!isAuthenticated()) {
+            await authenticateUser();
+          }
+          
+          // Parse date range from user input
+          const dateRange = parseDateRange(userInput);
+          if (dateRange) {
+            calendarEvents = await fetchCalendarEventsRange(dateRange.start, dateRange.end);
+          } else {
+            // Default to today if no specific date mentioned
+            calendarEvents = await fetchCalendarEvents(new Date());
+          }
+        } catch (error) {
+          console.error('Error fetching calendar events:', error);
+          // Continue without calendar context if fetch fails
+        }
+      }
+
+      // Call OpenAI API with calendar context
+      const aiResponse = await callOpenAI(userInput, conversationHistory, calendarEvents.length > 0 ? calendarEvents : undefined);
 
       // Parse response to determine if it's an action or regular message
       // Only mark as action if it's clearly proposing a concrete, actionable change
@@ -199,6 +304,7 @@ Respond naturally and helpfully to the user's questions and requests.`;
               type: actionType,
               details: actionDetails,
               status: "pending",
+              userRequest: userInput, // Store user's original request for parsing
             },
           }
         : {
@@ -225,7 +331,53 @@ Respond naturally and helpfully to the user's questions and requests.`;
     }
   };
 
-  const handleApproveAction = (messageId: string) => {
+  // Helper to parse event details from user request
+  const parseEventDetails = (userRequest: string): { title: string; start: Date; end: Date } | null => {
+    const lower = userRequest.toLowerCase();
+    
+    // Extract time (e.g., "3:30 PM", "3:30", "15:30")
+    const timeMatch = userRequest.match(/(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
+    let hour = 15; // Default 3:30 PM
+    let minute = 30;
+    
+    if (timeMatch) {
+      hour = parseInt(timeMatch[1]);
+      minute = parseInt(timeMatch[2]);
+      const ampm = timeMatch[3]?.toUpperCase();
+      if (ampm === 'PM' && hour !== 12) hour += 12;
+      if (ampm === 'AM' && hour === 12) hour = 0;
+    }
+    
+    // Determine date (today by default)
+    const eventDate = new Date();
+    eventDate.setHours(hour, minute, 0, 0);
+    
+    // Extract title from user request
+    let title = 'Event';
+    if (lower.includes('study session') || lower.includes('study')) {
+      title = 'Study Session';
+    } else if (lower.includes('attendance')) {
+      title = 'Attendance';
+    } else if (lower.includes('meeting')) {
+      title = 'Meeting';
+    } else if (lower.includes('class')) {
+      title = 'Class';
+    } else {
+      // Try to extract meaningful title
+      const words = userRequest.split(' ').filter(w => !w.match(/(\d{1,2}):(\d{2})|today|pm|am/i));
+      if (words.length > 0) {
+        title = words.slice(0, 3).join(' ');
+      }
+    }
+    
+    // Default duration: 1 hour
+    const endTime = new Date(eventDate);
+    endTime.setHours(endTime.getHours() + 1);
+    
+    return { title, start: eventDate, end: endTime };
+  };
+
+  const handleApproveAction = async (messageId: string) => {
     setMessages((prev) =>
       prev.map((msg) =>
         msg.id === messageId && msg.action
@@ -235,22 +387,80 @@ Respond naturally and helpfully to the user's questions and requests.`;
     );
 
     const message = messages.find((m) => m.id === messageId);
-    if (message?.action && onScheduleChange) {
-      onScheduleChange(message.action.type, message.action.details);
+    
+    if (message?.action) {
+      try {
+        // Ensure authenticated
+        if (!isAuthenticated()) {
+          await authenticateUser();
+        }
+        
+        // Execute calendar operation based on action type
+        if (message.action.type === "add" && message.action.userRequest) {
+          // Parse event details from user request
+          const eventDetails = parseEventDetails(message.action.userRequest);
+          
+          if (eventDetails) {
+            await createCalendarEvent({
+              summary: eventDetails.title,
+              start: eventDetails.start,
+              end: eventDetails.end,
+              description: `Created via Nexus Agent`,
+            });
+            
+            // Notify parent component
+            if (onScheduleChange) {
+              onScheduleChange(message.action.type, `Created event: ${eventDetails.title} at ${eventDetails.start.toLocaleTimeString()}`);
+            }
+            
+            // Add success message
+            setTimeout(() => {
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: Date.now().toString(),
+                  type: "agent",
+                  content: `✓ Calendar updated successfully. Created "${eventDetails.title}" at ${eventDetails.start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`,
+                  timestamp: new Date(),
+                },
+              ]);
+            }, 500);
+          } else {
+            throw new Error('Could not parse event details from your request');
+          }
+        } else {
+          // For other action types, just notify
+          if (onScheduleChange) {
+            onScheduleChange(message.action.type, message.action.details);
+          }
+          
+          setTimeout(() => {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: Date.now().toString(),
+                type: "agent",
+                content: "✓ Calendar updated successfully. Your schedule has been optimized.",
+                timestamp: new Date(),
+              },
+            ]);
+          }, 500);
+        }
+      } catch (error: any) {
+        console.error('Error executing calendar action:', error);
+        setTimeout(() => {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: Date.now().toString(),
+              type: "agent",
+              content: `Sorry, I encountered an error: ${error.message}. Please try again or add the event manually.`,
+              timestamp: new Date(),
+            },
+          ]);
+        }, 500);
+      }
     }
-
-    // Add confirmation message
-    setTimeout(() => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now().toString(),
-          type: "agent",
-          content: "✓ Calendar updated successfully. Your schedule has been optimized.",
-          timestamp: new Date(),
-        },
-      ]);
-    }, 500);
   };
 
   const handleRejectAction = (messageId: string) => {
