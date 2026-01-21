@@ -42,6 +42,7 @@ api_key.txt.txt
 *.key
 .env.local
 .env.production
+calendarcredentials.json
 
 # Vite
 .vite

@@ -15,9 +15,13 @@ import { WeeklyStrategy } from "@/app/components/WeeklyStrategy";
 import { ROIDashboard } from "@/app/components/ROIDashboard";
 import { NexusChatbot } from "@/app/components/NexusChatbot";
 import { Settings } from "@/app/components/Settings";
+import { useGoogleCalendarAuth } from "@/hooks/useGoogleCalendarAuth";
 import { toast } from "sonner";
 
 export default function App() {
+  // Initialize Google Calendar authentication on app load
+  useGoogleCalendarAuth();
+  
   const [viewMode, setViewMode] = useState<"focus" | "strategy" | "recovery">("focus");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [suggestions, setSuggestions] = useState([
