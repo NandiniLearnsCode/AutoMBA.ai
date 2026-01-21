@@ -6,6 +6,7 @@ import { Input } from "@/app/components/ui/input";
 import { Badge } from "@/app/components/ui/badge";
 import { ScrollArea } from "@/app/components/ui/scroll-area";
 import { motion, AnimatePresence } from "motion/react";
+import { getOpenAIApiKey } from "@/config/apiKey";
 
 interface Message {
   id: string;
@@ -41,12 +42,17 @@ export function NexusChatbot({ onScheduleChange }: NexusChatbotProps) {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    // Use setTimeout to ensure DOM is updated
+    setTimeout(() => {
+      if (messagesEndRef.current) {
+        messagesEndRef.current.scrollIntoView({ behavior: "smooth", block: "end" });
+      }
+    }, 50);
   };
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages, isTyping]);
 
   useEffect(() => {
     if (isOpen && inputRef.current) {
@@ -54,169 +60,169 @@ export function NexusChatbot({ onScheduleChange }: NexusChatbotProps) {
     }
   }, [isOpen]);
 
-  const processUserRequest = (input: string): Message[] => {
-    const lowerInput = input.toLowerCase();
-    const responses: Message[] = [];
-
-    // User message
-    responses.push({
-      id: Date.now().toString(),
-      type: "user",
-      content: input,
-      timestamp: new Date(),
-    });
-
-    // Pattern matching for different requests
-    if (lowerInput.includes("move") || lowerInput.includes("reschedule")) {
-      // Extract what to move and when
-      let eventToMove = "event";
-      let newTime = "later";
-      
-      if (lowerInput.includes("gym")) eventToMove = "Gym Session";
-      if (lowerInput.includes("meeting")) eventToMove = "meeting";
-      if (lowerInput.includes("lunch")) eventToMove = "lunch";
-      if (lowerInput.includes("study")) eventToMove = "study session";
-      
-      if (lowerInput.match(/\d+\s*(pm|am)/)) {
-        const timeMatch = lowerInput.match(/(\d+)\s*(pm|am)/);
-        if (timeMatch) newTime = `${timeMatch[1]} ${timeMatch[2].toUpperCase()}`;
-      } else if (lowerInput.includes("tomorrow")) {
-        newTime = "tomorrow morning";
-      } else if (lowerInput.includes("afternoon")) {
-        newTime = "this afternoon";
-      }
-
-      responses.push({
-        id: (Date.now() + 1).toString(),
-        type: "action",
-        content: `I can move your ${eventToMove} to ${newTime}. This adjustment considers your current HRV levels and creates optimal spacing for cognitive recovery.`,
-        timestamp: new Date(),
-        action: {
-          type: "move",
-          details: `Move ${eventToMove} to ${newTime}`,
-          status: "pending",
-        },
-      });
-    } else if (lowerInput.includes("cancel") || lowerInput.includes("remove")) {
-      let eventToCancel = "optional events";
-      
-      if (lowerInput.includes("gym")) eventToCancel = "Gym Session";
-      if (lowerInput.includes("all")) eventToCancel = "all optional events";
-      if (lowerInput.includes("afternoon")) eventToCancel = "afternoon appointments";
-
-      responses.push({
-        id: (Date.now() + 1).toString(),
-        type: "action",
-        content: `I'll cancel ${eventToCancel}. This will free up time for recovery, which your biometrics indicate is needed.`,
-        timestamp: new Date(),
-        action: {
-          type: "cancel",
-          details: `Cancel ${eventToCancel}`,
-          status: "pending",
-        },
-      });
-    } else if (lowerInput.includes("add") || lowerInput.includes("schedule") || lowerInput.includes("block")) {
-      let duration = "2 hours";
-      let activity = "deep work";
-      
-      if (lowerInput.match(/\d+\s*hour/)) {
-        const match = lowerInput.match(/(\d+)\s*hour/);
-        if (match) duration = `${match[1]} hour${match[1] !== "1" ? "s" : ""}`;
-      }
-      
-      if (lowerInput.includes("study")) activity = "focused study";
-      if (lowerInput.includes("work")) activity = "deep work";
-      if (lowerInput.includes("case")) activity = "case study prep";
-      if (lowerInput.includes("network")) activity = "networking";
-
-      responses.push({
-        id: (Date.now() + 1).toString(),
-        type: "action",
-        content: `I recommend adding ${duration} of ${activity} tomorrow at 9:00 AM when your cognitive performance is typically highest. This aligns with your peak productivity windows.`,
-        timestamp: new Date(),
-        action: {
-          type: "add",
-          details: `Add ${duration} ${activity} block at 9:00 AM tomorrow`,
-          status: "pending",
-        },
-      });
-    } else if (lowerInput.includes("next") || lowerInput.includes("what's") || lowerInput.includes("when")) {
-      responses.push({
-        id: (Date.now() + 1).toString(),
-        type: "agent",
-        content: "Your next commitment is the Coffee Chat with Sarah Chen (McKinsey) at 10:15 AM at Starbucks. It's a hard-block event with 45 minutes allocated. After that, you have the Strategy Canvas Quiz at 11:00 AM.",
-        timestamp: new Date(),
-      });
-    } else if (lowerInput.includes("optimize") || lowerInput.includes("improve") || lowerInput.includes("suggest")) {
-      responses.push({
-        id: (Date.now() + 1).toString(),
-        type: "action",
-        content: "Based on your biometrics (5.2h sleep, elevated HRV), I recommend moving the Valuation Case Study to tomorrow morning when your cognitive function peaks. This will improve output quality by approximately 34% based on your historical patterns.",
-        timestamp: new Date(),
-        action: {
-          type: "suggest",
-          details: "Move Valuation Case Study to tomorrow 9:00 AM",
-          status: "pending",
-        },
-      });
-    } else if (lowerInput.includes("clear") || lowerInput.includes("free up")) {
-      let timeframe = "afternoon";
-      if (lowerInput.includes("morning")) timeframe = "morning";
-      if (lowerInput.includes("tomorrow")) timeframe = "tomorrow";
-
-      responses.push({
-        id: (Date.now() + 1).toString(),
-        type: "action",
-        content: `I can clear your ${timeframe} by moving 2 flexible events and canceling 1 optional buffer. This creates a 3-hour block for high-impact work. Shall I proceed?`,
-        timestamp: new Date(),
-        action: {
-          type: "move",
-          details: `Clear ${timeframe} schedule`,
-          status: "pending",
-        },
-      });
-    } else if (lowerInput.includes("health") || lowerInput.includes("recovery") || lowerInput.includes("biometric")) {
-      responses.push({
-        id: (Date.now() + 1).toString(),
-        type: "agent",
-        content: "Your current biometrics show: HRV at 42ms (low), 5.2 hours sleep (suboptimal), and stress levels elevated. I recommend scheduling active recovery this afternoon and targeting 8+ hours sleep tonight. Your next high-stakes event (Goldman Sachs Info Session) would benefit from better rest beforehand.",
-        timestamp: new Date(),
-      });
-    } else if (lowerInput.includes("conflict")) {
-      responses.push({
-        id: (Date.now() + 1).toString(),
-        type: "agent",
-        content: "I've detected 1 schedule conflict: Goldman Sachs Info Session overlaps with your gym session at 12:00 PM. Given your low HRV, I recommend moving the gym session to 1:00 PM for active recovery instead of intense training.",
-        timestamp: new Date(),
-      });
-    } else {
-      // Default response
-      responses.push({
-        id: (Date.now() + 1).toString(),
-        type: "agent",
-        content: "I can help you with:\n• Moving or rescheduling events\n• Canceling appointments\n• Adding study/work blocks\n• Optimizing based on biometrics\n• Resolving conflicts\n• Clearing time for deep work\n\nWhat would you like me to do?",
-        timestamp: new Date(),
-      });
+  const callOpenAI = async (userMessage: string, conversationHistory: Array<{role: string, content: string}>): Promise<string> => {
+    const apiKey = getOpenAIApiKey();
+    if (!apiKey) {
+      throw new Error("OpenAI API key not found. Please set VITE_OPENAI_API_KEY environment variable.");
     }
 
-    return responses;
+    const systemPrompt = `You are the Nexus Executive Agent, an AI assistant helping MBA students optimize their schedule to maximize the Triple Bottom Line: Academic Excellence, Professional Networking, and Personal Well-being.
+
+Your role is to:
+- Help users optimize their schedule, manage conflicts, and make adjustments
+- Provide context-aware suggestions based on their needs
+- Be concise, professional, and action-oriented
+- When suggesting actions (moving, canceling, adding events), format your response clearly so the user understands what action you're proposing
+
+Respond naturally and helpfully to the user's questions and requests.`;
+
+    try {
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [
+            { role: "system", content: systemPrompt },
+            ...conversationHistory,
+            { role: "user", content: userMessage },
+          ],
+          temperature: 0.7,
+          max_tokens: 500,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error?.message || `API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      return data.choices[0]?.message?.content || "I apologize, but I couldn't generate a response. Please try again.";
+    } catch (error) {
+      console.error("OpenAI API error:", error);
+      throw error;
+    }
   };
 
-  const handleSendMessage = () => {
+  const handleSendMessage = async () => {
     if (!inputValue.trim()) return;
 
-    setIsTyping(true);
-    const newMessages = processUserRequest(inputValue);
-    
-    // Add user message immediately
-    setMessages((prev) => [...prev, newMessages[0]]);
+    const userInput = inputValue.trim();
     setInputValue("");
+    setIsTyping(true);
 
-    // Simulate agent thinking time
-    setTimeout(() => {
-      setMessages((prev) => [...prev, ...newMessages.slice(1)]);
+    // Add user message immediately
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      type: "user",
+      content: userInput,
+      timestamp: new Date(),
+    };
+
+    // Use functional update to get the latest messages including the new user message
+    let currentMessages: Message[] = [];
+    setMessages((prev) => {
+      currentMessages = [...prev, userMessage];
+      return currentMessages;
+    });
+
+    try {
+      // Build conversation history from previous messages (excluding the new user message, as it will be added in callOpenAI)
+      // Include user, agent, and action messages (action messages are also part of the conversation)
+      const previousMessages = currentMessages.slice(0, -1); // Exclude the last message (the new user message)
+      const conversationHistory = previousMessages
+        .filter(msg => {
+          // Include user and agent messages
+          if (msg.type === "user" || msg.type === "agent") return true;
+          // Include action messages that have been resolved (approved/rejected)
+          if (msg.type === "action" && msg.action?.status !== "pending") return true;
+          return false;
+        })
+        .map(msg => {
+          // Convert action messages to assistant messages for the API
+          if (msg.type === "action" && msg.action?.status !== "pending") {
+            const statusText = msg.action.status === "approved" ? " (approved)" : " (declined)";
+            return {
+              role: "assistant" as const,
+              content: msg.content + statusText,
+            };
+          }
+          return {
+            role: (msg.type === "user" ? "user" : "assistant") as const,
+            content: msg.content,
+          };
+        });
+
+      // Call OpenAI API
+      const aiResponse = await callOpenAI(userInput, conversationHistory);
+
+      // Parse response to determine if it's an action or regular message
+      // Only mark as action if it's clearly proposing a concrete, actionable change
+      // Look for patterns like "I can move...", "I'll cancel...", "Let me add...", "I recommend moving..."
+      const lowerResponse = aiResponse.toLowerCase();
+      let actionType: "move" | "cancel" | "add" | "suggest" | undefined;
+      let actionDetails = "";
+
+      // More conservative detection - only mark as action if it's proposing a specific action
+      const actionPatterns = {
+        move: /(?:i can|i'll|let me|i recommend|i suggest).*(?:move|reschedule|shift)/,
+        cancel: /(?:i can|i'll|let me|i recommend|i suggest).*(?:cancel|remove|delete)/,
+        add: /(?:i can|i'll|let me|i recommend|i suggest).*(?:add|schedule|block|create)/,
+        suggest: /(?:i recommend|i suggest|you should).*(?:move|cancel|add|reschedule|optimize)/,
+      };
+
+      if (actionPatterns.move.test(lowerResponse)) {
+        actionType = "move";
+        actionDetails = "Schedule adjustment";
+      } else if (actionPatterns.cancel.test(lowerResponse)) {
+        actionType = "cancel";
+        actionDetails = "Cancel event";
+      } else if (actionPatterns.add.test(lowerResponse)) {
+        actionType = "add";
+        actionDetails = "Add to schedule";
+      } else if (actionPatterns.suggest.test(lowerResponse)) {
+        actionType = "suggest";
+        actionDetails = "Optimization suggestion";
+      }
+
+      const agentMessage: Message = actionType
+        ? {
+            id: (Date.now() + 1).toString(),
+            type: "action",
+            content: aiResponse,
+            timestamp: new Date(),
+            action: {
+              type: actionType,
+              details: actionDetails,
+              status: "pending",
+            },
+          }
+        : {
+            id: (Date.now() + 1).toString(),
+            type: "agent",
+            content: aiResponse,
+            timestamp: new Date(),
+          };
+
+      setMessages((prev) => [...prev, agentMessage]);
+    } catch (error) {
+      console.error("Error calling OpenAI:", error);
+      const errorMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        type: "agent",
+        content: error instanceof Error 
+          ? `I apologize, but I encountered an error: ${error.message}. Please check your API key configuration.`
+          : "I apologize, but I encountered an error. Please try again.",
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, errorMessage]);
+    } finally {
       setIsTyping(false);
-    }, 800);
+    }
   };
 
   const handleApproveAction = (messageId: string) => {
@@ -325,8 +331,8 @@ export function NexusChatbot({ onScheduleChange }: NexusChatbotProps) {
             </div>
 
             {/* Messages */}
-            <ScrollArea className="flex-1 p-4">
-              <div className="space-y-4">
+            <ScrollArea className="flex-1 min-h-0">
+              <div className="p-4 space-y-4">
                 {messages.map((message) => (
                   <div key={message.id}>
                     {message.type === "user" ? (
