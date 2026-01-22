@@ -45,27 +45,65 @@ export function CommandCenter({ events: propEvents = [], userFocus }: CommandCen
         dayStart.setHours(0, 0, 0, 0);
         dayEnd.setHours(23, 59, 59, 999);
 
-        const response = await callTool('list_events', {
-          calendarId: 'primary',
-          timeMin: dayStart.toISOString(),
-          timeMax: dayEnd.toISOString(),
-          maxResults: 50,
-        });
-
-        // Parse events (similar to TimelineView)
-        let calendarEvents: any[] = [];
-        if (Array.isArray(response)) {
-          const textContent = response.find((item: any) => item.type === 'text');
-          if (textContent?.text) {
-            try {
-              calendarEvents = JSON.parse(textContent.text);
-            } catch (e) {
-              console.error('Error parsing calendar events:', e);
+        // First, get all calendars
+        let allCalendars: any[] = [];
+        try {
+          const calendarsResponse = await callTool('list_calendars', {});
+          if (Array.isArray(calendarsResponse)) {
+            const textContent = calendarsResponse.find((item: any) => item.type === 'text');
+            if (textContent?.text) {
+              allCalendars = JSON.parse(textContent.text);
+            } else if (calendarsResponse.length > 0 && typeof calendarsResponse[0] === 'object' && 'id' in calendarsResponse[0]) {
+              allCalendars = calendarsResponse;
             }
-          } else if (response.length > 0 && typeof response[0] === 'object' && 'id' in response[0]) {
-            calendarEvents = response;
+          } else if (calendarsResponse?.content) {
+            const textContent = calendarsResponse.content.find((item: any) => item.type === 'text');
+            if (textContent?.text) {
+              allCalendars = JSON.parse(textContent.text);
+            }
           }
+          
+          // Filter to only selected/visible calendars
+          allCalendars = allCalendars.filter((cal: any) => cal.accessRole && (cal.selected !== false));
+        } catch (calError) {
+          // Fallback to primary calendar
+          allCalendars = [{ id: 'primary', summary: 'Primary Calendar' }];
         }
+
+        // Fetch events from all calendars in parallel
+        const eventPromises = allCalendars.map(async (cal: any) => {
+          try {
+            const response = await callTool('list_events', {
+              calendarId: cal.id,
+              timeMin: dayStart.toISOString(),
+              timeMax: dayEnd.toISOString(),
+              maxResults: 50,
+            });
+
+            // Parse events
+            let calendarEvents: any[] = [];
+            if (Array.isArray(response)) {
+              const textContent = response.find((item: any) => item.type === 'text');
+              if (textContent?.text) {
+                try {
+                  calendarEvents = JSON.parse(textContent.text);
+                } catch (e) {
+                  console.error('Error parsing calendar events:', e);
+                }
+              } else if (response.length > 0 && typeof response[0] === 'object' && 'id' in response[0]) {
+                calendarEvents = response;
+              }
+            }
+            
+            return calendarEvents;
+          } catch (err) {
+            console.warn(`Failed to fetch events from calendar ${cal.id}:`, err);
+            return [];
+          }
+        });
+        
+        const allEventArrays = await Promise.all(eventPromises);
+        const calendarEvents = allEventArrays.flat(); // Combine all events
 
         // Convert to CalendarEvent format
         const parsedEvents: CalendarEvent[] = calendarEvents

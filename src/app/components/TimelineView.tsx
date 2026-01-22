@@ -386,49 +386,89 @@ export function TimelineView() {
         endDate.setHours(23, 59, 59, 999);
       }
       
-      // Call MCP list_events tool
-      console.log('[TimelineView] Calling list_events tool...', {
-        timeMin: startDate.toISOString(),
-        timeMax: endDate.toISOString(),
-      });
-      const response = await callTool('list_events', {
-        calendarId: 'primary',
-        timeMin: startDate.toISOString(),
-        timeMax: endDate.toISOString(),
-        maxResults: 500, // Increased to get more events
-      });
-      
-      console.log('[TimelineView] Received response:', response);
-      
-      // Parse MCP response (content array with text field containing JSON)
-      let events: CalendarEvent[] = [];
-      if (Array.isArray(response)) {
-        // Response is an array of content items from MCP
-        const textContent = response.find((item: any) => item.type === 'text');
-        if (textContent?.text) {
-          try {
-            events = JSON.parse(textContent.text);
-          } catch (parseError) {
-            console.error('[TimelineView] Error parsing JSON from text content:', parseError);
-            throw new Error('Failed to parse calendar events from server response');
+      // First, get all calendars (my calendars + other calendars)
+      console.log('[TimelineView] Fetching all calendars...');
+      let allCalendars: any[] = [];
+      try {
+        const calendarsResponse = await callTool('list_calendars', {});
+        // Parse calendars response
+        if (Array.isArray(calendarsResponse)) {
+          const textContent = calendarsResponse.find((item: any) => item.type === 'text');
+          if (textContent?.text) {
+            allCalendars = JSON.parse(textContent.text);
+          } else if (calendarsResponse.length > 0 && typeof calendarsResponse[0] === 'object' && 'id' in calendarsResponse[0]) {
+            allCalendars = calendarsResponse;
           }
-        } else if (response.length > 0 && typeof response[0] === 'object' && 'id' in response[0]) {
-          // Response might be an array of events directly
-          events = response as CalendarEvent[];
-        } else {
-          console.warn('[TimelineView] Unexpected response format:', response);
+        } else if (calendarsResponse?.content) {
+          const textContent = calendarsResponse.content.find((item: any) => item.type === 'text');
+          if (textContent?.text) {
+            allCalendars = JSON.parse(textContent.text);
+          }
         }
-      } else if (typeof response === 'string') {
-        // Response is a JSON string
-        try {
-          events = JSON.parse(response);
-        } catch (parseError) {
-          console.error('[TimelineView] Error parsing JSON string:', parseError);
-          throw new Error('Failed to parse calendar events from server response');
-        }
-      } else {
-        console.warn('[TimelineView] Unexpected response type:', typeof response, response);
+        
+        // Filter to only show calendars that are selected/visible
+        // Google Calendar API returns accessRole and selected properties
+        allCalendars = allCalendars.filter((cal: any) => {
+          // Show calendars where user has access and calendar is selected/visible
+          return cal.accessRole && (cal.selected !== false); // Include if selected is true or undefined
+        });
+        
+        console.log(`[TimelineView] Found ${allCalendars.length} calendars:`, allCalendars.map((c: any) => c.summary || c.id));
+      } catch (calError) {
+        console.warn('[TimelineView] Could not fetch calendars, using primary only:', calError);
+        // Fallback to primary calendar if list_calendars fails
+        allCalendars = [{ id: 'primary', summary: 'Primary Calendar' }];
       }
+      
+      // Fetch events from all calendars in parallel
+      console.log('[TimelineView] Fetching events from all calendars...', {
+        timeMin: startDate.toISOString(),
+        timeMax: endDate.toISOString(),
+        calendarCount: allCalendars.length,
+      });
+      
+      const eventPromises = allCalendars.map(async (cal: any) => {
+        try {
+          const response = await callTool('list_events', {
+            calendarId: cal.id,
+            timeMin: startDate.toISOString(),
+            timeMax: endDate.toISOString(),
+            maxResults: 500,
+          });
+          
+          // Parse response
+          let events: CalendarEvent[] = [];
+          if (Array.isArray(response)) {
+            const textContent = response.find((item: any) => item.type === 'text');
+            if (textContent?.text) {
+              events = JSON.parse(textContent.text);
+            } else if (response.length > 0 && typeof response[0] === 'object' && 'id' in response[0]) {
+              events = response as CalendarEvent[];
+            }
+          } else if (response?.content) {
+            const textContent = response.content.find((item: any) => item.type === 'text');
+            if (textContent?.text) {
+              events = JSON.parse(textContent.text);
+            }
+          }
+          
+          // Add calendar info to each event
+          return events.map((event: any) => ({
+            ...event,
+            calendarId: cal.id,
+            calendarName: cal.summary || cal.id,
+          }));
+        } catch (err) {
+          console.warn(`[TimelineView] Failed to fetch events from calendar ${cal.id} (${cal.summary}):`, err);
+          return [];
+        }
+      });
+      
+      // Wait for all calendar fetches to complete
+      const allEventArrays = await Promise.all(eventPromises);
+      const events = allEventArrays.flat(); // Combine all events from all calendars
+      
+      console.log(`[TimelineView] Fetched ${events.length} total events from ${allCalendars.length} calendars`);
       
       // Parse events for the selected view (day/week/month)
       console.log('[TimelineView] Parsing', events.length, 'events');

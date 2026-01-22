@@ -298,7 +298,7 @@ export function AssignmentGrid() {
         return;
       }
       
-      // Fetch Google Calendar events
+      // Fetch Google Calendar events from all calendars
       let calendarEvents: any[] = [];
       if (calendarConnected) {
         try {
@@ -306,36 +306,77 @@ export function AssignmentGrid() {
           now.setHours(0, 0, 0, 0);
           const endOfYear = new Date(now.getFullYear(), 11, 31, 23, 59, 59);
           
-          console.log('📅 Fetching Google Calendar events...');
-          const calendarResponse = await callCalendarTool('list_events', {
-            calendarId: 'primary',
-            timeMin: now.toISOString(),
-            timeMax: endOfYear.toISOString(),
-            maxResults: 500,
-          });
-          
-          // Parse calendar events
-          if (Array.isArray(calendarResponse)) {
-            const textContent = calendarResponse.find((item: any) => item.type === 'text');
-            if (textContent?.text) {
-              try {
-                calendarEvents = JSON.parse(textContent.text);
-              } catch {
-                if (calendarResponse.length > 0 && typeof calendarResponse[0] === 'object' && 'id' in calendarResponse[0]) {
-                  calendarEvents = calendarResponse;
-                }
+          // First, get all calendars
+          console.log('📅 Fetching all Google Calendars...');
+          let allCalendars: any[] = [];
+          try {
+            const calendarsResponse = await callCalendarTool('list_calendars', {});
+            if (Array.isArray(calendarsResponse)) {
+              const textContent = calendarsResponse.find((item: any) => item.type === 'text');
+              if (textContent?.text) {
+                allCalendars = JSON.parse(textContent.text);
+              } else if (calendarsResponse.length > 0 && typeof calendarsResponse[0] === 'object' && 'id' in calendarsResponse[0]) {
+                allCalendars = calendarsResponse;
               }
-            } else if (calendarResponse.length > 0 && typeof calendarResponse[0] === 'object' && 'id' in calendarResponse[0]) {
-              calendarEvents = calendarResponse;
+            } else if (calendarsResponse?.content) {
+              const textContent = calendarsResponse.content.find((item: any) => item.type === 'text');
+              if (textContent?.text) {
+                allCalendars = JSON.parse(textContent.text);
+              }
             }
-          } else if (calendarResponse?.content && Array.isArray(calendarResponse.content)) {
-            const textContent = calendarResponse.content.find((item: any) => item.type === 'text');
-            if (textContent?.text) {
-              calendarEvents = JSON.parse(textContent.text);
-            }
+            
+            // Filter to only selected/visible calendars
+            allCalendars = allCalendars.filter((cal: any) => cal.accessRole && (cal.selected !== false));
+            console.log(`✅ Found ${allCalendars.length} calendars:`, allCalendars.map((c: any) => c.summary || c.id));
+          } catch (calError) {
+            console.warn('⚠️ Could not fetch calendars, using primary only:', calError);
+            allCalendars = [{ id: 'primary', summary: 'Primary Calendar' }];
           }
           
-          console.log(`✅ Got ${calendarEvents.length} Google Calendar events`);
+          // Fetch events from all calendars in parallel
+          console.log('📅 Fetching Google Calendar events from all calendars...');
+          const eventPromises = allCalendars.map(async (cal: any) => {
+            try {
+              const calendarResponse = await callCalendarTool('list_events', {
+                calendarId: cal.id,
+                timeMin: now.toISOString(),
+                timeMax: endOfYear.toISOString(),
+                maxResults: 500,
+              });
+              
+              // Parse calendar events
+              let events: any[] = [];
+              if (Array.isArray(calendarResponse)) {
+                const textContent = calendarResponse.find((item: any) => item.type === 'text');
+                if (textContent?.text) {
+                  try {
+                    events = JSON.parse(textContent.text);
+                  } catch {
+                    if (calendarResponse.length > 0 && typeof calendarResponse[0] === 'object' && 'id' in calendarResponse[0]) {
+                      events = calendarResponse;
+                    }
+                  }
+                } else if (calendarResponse.length > 0 && typeof calendarResponse[0] === 'object' && 'id' in calendarResponse[0]) {
+                  events = calendarResponse;
+                }
+              } else if (calendarResponse?.content && Array.isArray(calendarResponse.content)) {
+                const textContent = calendarResponse.content.find((item: any) => item.type === 'text');
+                if (textContent?.text) {
+                  events = JSON.parse(textContent.text);
+                }
+              }
+              
+              return events;
+            } catch (err) {
+              console.warn(`⚠️ Failed to fetch events from calendar ${cal.id}:`, err);
+              return [];
+            }
+          });
+          
+          const allEventArrays = await Promise.all(eventPromises);
+          calendarEvents = allEventArrays.flat(); // Combine all events
+          
+          console.log(`✅ Got ${calendarEvents.length} Google Calendar events from ${allCalendars.length} calendars`);
         } catch (calendarError: any) {
           console.warn('⚠️ Could not fetch Google Calendar events:', calendarError.message);
         }
