@@ -46,10 +46,19 @@ const defaultAssignments: Assignment[] = [
 // Convert Canvas assignment to our format
 function convertCanvasAssignment(canvasAssignment: any): Assignment | null {
   try {
-    const dueDate = canvasAssignment.due_at ? parseISO(canvasAssignment.due_at) : null;
+    // Handle different date formats from Canvas
+    let dueDate: Date | null = null;
+    if (canvasAssignment.due_at) {
+      try {
+        dueDate = parseISO(canvasAssignment.due_at);
+      } catch (e) {
+        console.warn('Error parsing due date:', canvasAssignment.due_at);
+      }
+    }
+    
     const submission = canvasAssignment.submission;
     
-    // Determine status
+    // Determine status and progress
     let status: "not-started" | "in-progress" | "completed" = "not-started";
     let progress = 0;
     
@@ -60,7 +69,18 @@ function convertCanvasAssignment(canvasAssignment: any): Assignment | null {
       } else if (submission.workflow_state === 'unsubmitted' && submission.submitted_at) {
         status = "in-progress";
         progress = 50; // Estimate
+      } else if (submission.workflow_state === 'unsubmitted' && submission.body) {
+        // Has some work started
+        status = "in-progress";
+        progress = 25; // Estimate
       }
+    }
+    
+    // Check if assignment has been submitted based on submission status
+    if (canvasAssignment.submission?.workflow_state === 'submitted' || 
+        canvasAssignment.submission?.workflow_state === 'graded') {
+      status = "completed";
+      progress = 100;
     }
     
     // Calculate priority based on due date
@@ -132,38 +152,73 @@ export function AssignmentGrid() {
 
       try {
         setLoadingAssignments(true);
+        console.log('Fetching Canvas assignments...');
         const response = await callTool('list_user_assignments', {});
         
-        // Parse the response
+        console.log('Canvas API response:', response);
+        
+        // Parse the response - MCP returns content array with text items
         let canvasAssignments: any[] = [];
+        
         if (Array.isArray(response)) {
+          // Look for text content in the response
           const textContent = response.find((item: any) => item.type === 'text');
           if (textContent?.text) {
             try {
-              canvasAssignments = JSON.parse(textContent.text);
+              const parsed = JSON.parse(textContent.text);
+              // Canvas API returns an array of assignments
+              canvasAssignments = Array.isArray(parsed) ? parsed : [parsed];
+              console.log(`Found ${canvasAssignments.length} Canvas assignments`);
             } catch (e) {
-              console.error('Error parsing Canvas assignments:', e);
+              console.error('Error parsing Canvas assignments JSON:', e);
+              console.error('Raw text:', textContent.text);
             }
-          } else if (response.length > 0 && typeof response[0] === 'object' && 'id' in response[0]) {
-            canvasAssignments = response;
+          } else if (response.length > 0) {
+            // Check if response is already an array of assignments
+            const firstItem = response[0];
+            if (typeof firstItem === 'object' && ('id' in firstItem || 'name' in firstItem)) {
+              canvasAssignments = response;
+              console.log(`Found ${canvasAssignments.length} Canvas assignments (direct array)`);
+            }
+          }
+        } else if (response && typeof response === 'object') {
+          // Handle case where response is a single object with content array
+          if (response.content && Array.isArray(response.content)) {
+            const textContent = response.content.find((item: any) => item.type === 'text');
+            if (textContent?.text) {
+              try {
+                const parsed = JSON.parse(textContent.text);
+                canvasAssignments = Array.isArray(parsed) ? parsed : [parsed];
+                console.log(`Found ${canvasAssignments.length} Canvas assignments (from content)`);
+              } catch (e) {
+                console.error('Error parsing Canvas assignments from content:', e);
+              }
+            }
           }
         }
 
         // Convert to our format and filter out nulls
         const converted = canvasAssignments
           .map(convertCanvasAssignment)
-          .filter((a): a is Assignment => a !== null)
-          .sort((a, b) => {
-            // Sort by priority and due date
-            const priorityOrder = { high: 0, medium: 1, low: 2 };
-            const priorityDiff = priorityOrder[a.priority] - priorityOrder[b.priority];
-            if (priorityDiff !== 0) return priorityDiff;
-            // If same priority, sort by due date (earlier first)
-            return 0; // Could add date sorting here if needed
-          });
+          .filter((a): a is Assignment => a !== null);
+
+        console.log(`Converted ${converted.length} assignments to display format`);
+
+        // Sort by priority and due date
+        converted.sort((a, b) => {
+          const priorityOrder = { high: 0, medium: 1, low: 2 };
+          const priorityDiff = priorityOrder[a.priority] - priorityOrder[b.priority];
+          if (priorityDiff !== 0) return priorityDiff;
+          
+          // If same priority, sort alphabetically by title
+          return a.title.localeCompare(b.title);
+        });
 
         if (converted.length > 0) {
+          console.log('Setting assignments:', converted);
           setAssignments(converted);
+        } else {
+          console.warn('No assignments found or converted. Keeping default assignments.');
         }
       } catch (error) {
         console.error('Error fetching Canvas assignments:', error);
