@@ -104,6 +104,13 @@ app.post('/mcp', async (req, res) => {
         result = {};
         break;
 
+      case 'resources/list':
+        // Return empty resources list (this server doesn't expose resources)
+        result = {
+          resources: []
+        };
+        break;
+
       case 'tools/list':
         result = {
           tools: [
