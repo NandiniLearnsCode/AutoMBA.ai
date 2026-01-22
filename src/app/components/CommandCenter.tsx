@@ -4,7 +4,7 @@ import { Badge } from "@/app/components/ui/badge";
 import { format, startOfDay, endOfDay } from "date-fns";
 import { getToday } from "@/utils/dateUtils";
 import { useMcpServer } from "@/hooks/useMcpServer";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 
 interface CalendarEvent {
   id: string;
@@ -30,43 +30,44 @@ export function CommandCenter({ events: propEvents = [], userFocus }: CommandCen
   const events = propEvents.length > 0 ? propEvents : loadedEvents;
 
   // Load today's events from calendar
-  const loadTodayEvents = useCallback(async () => {
-    if (!connected) {
-      await connect();
-      return;
-    }
-
-    try {
-      const today = getToday();
-      const dayStart = startOfDay(today);
-      const dayEnd = endOfDay(today);
-      
-      dayStart.setHours(0, 0, 0, 0);
-      dayEnd.setHours(23, 59, 59, 999);
-
-      const response = await callTool('list_events', {
-        calendarId: 'primary',
-        timeMin: dayStart.toISOString(),
-        timeMax: dayEnd.toISOString(),
-        maxResults: 50,
-      });
-
-      // Parse events (similar to TimelineView)
-      let calendarEvents: any[] = [];
-      if (Array.isArray(response)) {
-        const textContent = response.find((item: any) => item.type === 'text');
-        if (textContent?.text) {
-          try {
-            calendarEvents = JSON.parse(textContent.text);
-          } catch (e) {
-            console.error('Error parsing calendar events:', e);
-          }
-        } else if (response.length > 0 && typeof response[0] === 'object' && 'id' in response[0]) {
-          calendarEvents = response;
-        }
+  useEffect(() => {
+    const loadTodayEvents = async () => {
+      if (!connected) {
+        await connect();
+        return;
       }
 
-      // Convert to CalendarEvent format
+      try {
+        const today = getToday();
+        const dayStart = startOfDay(today);
+        const dayEnd = endOfDay(today);
+        
+        dayStart.setHours(0, 0, 0, 0);
+        dayEnd.setHours(23, 59, 59, 999);
+
+        const response = await callTool('list_events', {
+          calendarId: 'primary',
+          timeMin: dayStart.toISOString(),
+          timeMax: dayEnd.toISOString(),
+          maxResults: 50,
+        });
+
+        // Parse events (similar to TimelineView)
+        let calendarEvents: any[] = [];
+        if (Array.isArray(response)) {
+          const textContent = response.find((item: any) => item.type === 'text');
+          if (textContent?.text) {
+            try {
+              calendarEvents = JSON.parse(textContent.text);
+            } catch (e) {
+              console.error('Error parsing calendar events:', e);
+            }
+          } else if (response.length > 0 && typeof response[0] === 'object' && 'id' in response[0]) {
+            calendarEvents = response;
+          }
+        }
+
+        // Convert to CalendarEvent format
         const parsedEvents: CalendarEvent[] = calendarEvents
           .map((event: any) => {
             const startTime = event.start?.dateTime || event.start?.date;
@@ -121,19 +122,7 @@ export function CommandCenter({ events: propEvents = [], userFocus }: CommandCen
     if (connected) {
       loadTodayEvents();
     }
-  }, [connected, callTool, connect, loadTodayEvents]);
-
-  // Auto-refresh calendar events every 30 seconds to sync new events from Google Calendar
-  useEffect(() => {
-    if (!connected) return;
-
-    const refreshInterval = setInterval(() => {
-      console.log('[CommandCenter] Auto-refreshing calendar events...');
-      loadTodayEvents();
-    }, 30000); // Refresh every 30 seconds
-
-    return () => clearInterval(refreshInterval);
-  }, [connected, loadTodayEvents]);
+  }, [connected, callTool, connect]);
 
   // Get current time-based greeting
   const currentHour = new Date().getHours();
