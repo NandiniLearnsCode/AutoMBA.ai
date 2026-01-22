@@ -253,110 +253,66 @@ export function AssignmentGrid() {
 
     try {
       const startTime = Date.now();
-      console.log('🚀 Fetching Canvas course items...');
-      console.log('📡 Calling tool: list_user_course_items');
+      console.log('🚀 Fetching Canvas data...');
       
-      const response = await callTool('list_user_course_items', {});
-      console.log('📦 Raw response received:', response);
+      // Try the new tool first, fallback to assignments if it fails
+      let canvasItems: any[] = [];
+      let allItems: any[] = [];
       
-      // Parse response (optimized)
-      const canvasItems = parseCanvasResponse(response);
-      console.log(`✅ Found ${canvasItems.length} Canvas items in ${Date.now() - startTime}ms`);
+      try {
+        console.log('📡 Trying list_user_course_items...');
+        const response = await callTool('list_user_course_items', {});
+        allItems = parseCanvasResponse(response);
+        console.log(`✅ Got ${allItems.length} items from list_user_course_items`);
+      } catch (error: any) {
+        console.warn('⚠️ list_user_course_items failed, trying list_user_assignments:', error.message);
+        try {
+          const response = await callTool('list_user_assignments', {});
+          const assignments = parseCanvasResponse(response);
+          // Convert assignments to the unified format
+          allItems = assignments.map(a => ({
+            type: 'assignment',
+            ...a
+          }));
+          console.log(`✅ Got ${allItems.length} assignments from list_user_assignments`);
+        } catch (fallbackError: any) {
+          console.error('❌ Both tools failed:', fallbackError.message);
+          throw fallbackError;
+        }
+      }
       
-      if (canvasItems.length === 0) {
-        console.warn('⚠️ No Canvas items returned from API. Check server logs.');
+      if (allItems.length === 0) {
+        console.warn('⚠️ No Canvas items returned from API.');
         setItems([]);
         itemsCountRef.current = 0;
         return;
       }
       
-      // Log sample items for debugging
-      if (canvasItems.length > 0) {
-        console.log('📋 Sample items:', canvasItems.slice(0, 3).map(i => ({
-          type: i.type,
-          name: i.name || i.title,
-          due_at: i.due_at,
-          posted_at: i.posted_at,
-          start_at: i.start_at,
-        })));
-      }
+      console.log(`📦 Total items fetched: ${allItems.length}`);
+      console.log('📋 Sample items:', allItems.slice(0, 3));
 
-      // Filter to show only items with due dates from January 2026 onwards
-      const january2026 = new Date(2026, 0, 1); // January 1, 2026
-      january2026.setHours(0, 0, 0, 0);
-      
-      console.log(`📅 Filtering items: Only showing items with dates from ${format(january2026, 'MMMM yyyy')} onwards`);
-      
-      // Filter items by date - show only January 2026 and future
-      const jan2026AndFutureItems = canvasItems.filter((canvasItem) => {
-        // Get the appropriate date field based on type
-        let itemDate: Date | null = null;
-        
-        if (canvasItem.type === 'announcement') {
-          if (canvasItem.posted_at) {
-            try {
-              itemDate = parseISO(canvasItem.posted_at);
-            } catch {
-              if (canvasItem.created_at) {
-                try {
-                  itemDate = parseISO(canvasItem.created_at);
-                } catch {}
-              }
-            }
-          }
-        } else if (canvasItem.type === 'calendar_event') {
-          if (canvasItem.start_at) {
-            try {
-              itemDate = parseISO(canvasItem.start_at);
-            } catch {}
-          }
-        } else {
-          // Assignment or quiz - use due_at
-          if (canvasItem.due_at) {
-            try {
-              itemDate = parseISO(canvasItem.due_at);
-            } catch {}
-          }
-        }
-        
-        if (!itemDate) {
-          // Exclude items without dates
-          return false;
-        }
-        
-        // Include if date is January 2026 or later
-        return itemDate >= january2026;
-      });
-      
-      const assignmentsCount = jan2026AndFutureItems.filter(i => i.type === 'assignment').length;
-      const quizzesCount = jan2026AndFutureItems.filter(i => i.type === 'quiz').length;
-      const announcementsCount = jan2026AndFutureItems.filter(i => i.type === 'announcement').length;
-      const calendarCount = jan2026AndFutureItems.filter(i => i.type === 'calendar_event').length;
-      console.log(`📅 Filtered to ${assignmentsCount} assignments, ${quizzesCount} quizzes, ${announcementsCount} announcements, ${calendarCount} calendar events from January 2026 onwards`);
-      
-      // If no items after filtering, show all items as fallback for debugging
-      let itemsToConvert = jan2026AndFutureItems;
-      if (jan2026AndFutureItems.length === 0 && canvasItems.length > 0) {
-        console.warn('⚠️ No items match January 2026 filter. Showing all items for debugging.');
-        console.warn('📊 Total items before filter:', canvasItems.length);
-        console.warn('📊 Items by type:', {
-          assignments: canvasItems.filter(i => i.type === 'assignment').length,
-          quizzes: canvasItems.filter(i => i.type === 'quiz').length,
-          announcements: canvasItems.filter(i => i.type === 'announcement').length,
-          calendar_events: canvasItems.filter(i => i.type === 'calendar_event').length,
-        });
-        itemsToConvert = canvasItems;
-      }
-
+      // NO FILTERING - Show everything we got!
       // Convert to our format and filter out nulls
-      const converted = itemsToConvert
+      const converted = allItems
         .map(convertCanvasItem)
         .filter((a): a is CourseItem => a !== null);
       
-      console.log(`🔄 Converted ${converted.length} items (${itemsToConvert.length - converted.length} failed conversion)`);
+      console.log(`🔄 Converted ${converted.length} items (${allItems.length - converted.length} failed conversion)`);
 
-      // Sort by priority and due date
+      // Sort by date (if available) or title
       converted.sort((a, b) => {
+        // Try to sort by date first
+        try {
+          const dateA = parseISO(a.dueDate === "No date" ? "9999-12-31" : a.dueDate);
+          const dateB = parseISO(b.dueDate === "No date" ? "9999-12-31" : b.dueDate);
+          if (dateA.getTime() !== dateB.getTime()) {
+            return dateA.getTime() - dateB.getTime();
+          }
+        } catch {
+          // If date parsing fails, continue to priority sorting
+        }
+        
+        // Then by priority
         const priorityOrder = { high: 0, medium: 1, low: 2 };
         const priorityDiff = priorityOrder[a.priority] - priorityOrder[b.priority];
         return priorityDiff !== 0 ? priorityDiff : a.title.localeCompare(b.title);
@@ -366,17 +322,16 @@ export function AssignmentGrid() {
       itemsCountRef.current = converted.length;
       lastFetchTimeRef.current = Date.now();
       
-      if (converted.length === 0 && canvasItems.length === 0) {
-        console.warn('⚠️ No Canvas items found.');
-      } else if (converted.length === 0 && canvasItems.length > 0) {
-        console.warn('⚠️ Items found but none passed conversion/filtering. Check console for details.');
+      console.log(`✅ Successfully loaded ${converted.length} items in ${Date.now() - startTime}ms`);
+      
+      if (converted.length === 0) {
+        console.warn('⚠️ No items could be converted. Check item format.');
       }
     } catch (error: any) {
       console.error('❌ Error fetching Canvas items:', error);
       console.error('❌ Error details:', {
         message: error?.message,
         stack: error?.stack,
-        response: error?.response,
       });
       setItems([]);
       itemsCountRef.current = 0;
@@ -464,7 +419,7 @@ export function AssignmentGrid() {
       <div className="flex items-center justify-between mb-4">
         <div>
           <h3 className="font-semibold">Canvas Course Items</h3>
-          <p className="text-xs text-muted-foreground mt-0.5">January 2026 & Future</p>
+          <p className="text-xs text-muted-foreground mt-0.5">All Items</p>
         </div>
         <div className="flex items-center gap-2">
           {loadingItems && (
@@ -530,8 +485,8 @@ export function AssignmentGrid() {
         )}
         {filteredItems.length === 0 && !loadingItems && hasTriedFetch && !connectionError && (
           <div className="text-center py-8 text-sm text-muted-foreground">
-            <p>No {activeTab === "all" ? "items" : activeTab} found for January 2026 and future months.</p>
-            <p className="text-xs mt-1">Make sure Canvas is connected and you have items with dates from January 2026 onwards.</p>
+            <p>No {activeTab === "all" ? "items" : activeTab} found.</p>
+            <p className="text-xs mt-1">Make sure Canvas is connected and you have course items.</p>
             <p className="text-xs mt-1">Check browser console (F12) for details.</p>
           </div>
         )}
