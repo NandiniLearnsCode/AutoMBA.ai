@@ -8,11 +8,24 @@ import cors from 'cors';
 import { google } from 'googleapis';
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
-// Enable CORS for Vite dev server
+// Enable CORS - allow all origins in production (Cloud Run)
+// In production, you may want to restrict this to your domain
+const allowedOrigins = process.env.ALLOWED_ORIGINS 
+  ? process.env.ALLOWED_ORIGINS.split(',')
+  : ['http://localhost:5173', 'http://localhost:3000'];
+
 app.use(cors({
-  origin: 'http://localhost:5173',
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV === 'production') {
+      callback(null, true);
+    } else {
+      callback(null, true); // Allow all in production for Cloud Run
+    }
+  },
   credentials: true
 }));
 
