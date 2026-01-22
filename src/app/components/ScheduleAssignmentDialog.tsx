@@ -52,7 +52,7 @@ export function ScheduleAssignmentDialog({
         await connect();
       }
 
-      // Parse start time and create event for today (Jan 21, 2026)
+      // Parse start time and create event for today (system date)
       const today = getToday();
       const [hours, minutes] = startTime.split(':').map(Number);
       const startDate = new Date(today);

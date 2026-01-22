@@ -62,6 +62,23 @@ app.post('/mcp', async (req, res) => {
       });
     }
 
+    // Allow initialize and notifications/initialized without authentication
+    if (method === 'initialize' || method === 'notifications/initialized' || method === 'tools/list') {
+      // These methods don't require authentication
+    } else if (method === 'tools/call') {
+      // Check authentication for tool calls
+      if (!oauth2Client.credentials || (!oauth2Client.credentials.access_token && !oauth2Client.credentials.refresh_token)) {
+        return res.json({
+          jsonrpc: '2.0',
+          id,
+          error: {
+            code: -32001,
+            message: 'OAuth2 not authenticated. Please visit http://localhost:3000/auth/url to authenticate first.'
+          }
+        });
+      }
+    }
+
     let result;
 
     switch (method) {
@@ -77,6 +94,11 @@ app.post('/mcp', async (req, res) => {
             version: '1.0.0'
           }
         };
+        break;
+
+      case 'notifications/initialized':
+        // Acknowledge initialization notification
+        result = {};
         break;
 
       case 'tools/list':
@@ -322,10 +344,31 @@ app.get('/oauth2callback', async (req, res) => {
   try {
     const { tokens } = await oauth2Client.getToken(code);
     oauth2Client.setCredentials(tokens);
-    res.send('Authentication successful! You can close this window.');
+    
+    // Store tokens in environment for persistence (optional)
+    console.log('✅ Authentication successful! Tokens received.');
+    console.log('Access token expires:', tokens.expiry_date ? new Date(tokens.expiry_date).toLocaleString() : 'Never');
+    
+    res.send(`
+      <html>
+        <body style="font-family: Arial; padding: 20px; text-align: center;">
+          <h1 style="color: green;">✅ Authentication Successful!</h1>
+          <p>You can close this window and return to the app.</p>
+          <p>Your Google Calendar access is now active.</p>
+        </body>
+      </html>
+    `);
   } catch (error) {
     console.error('OAuth error:', error);
-    res.send(`Error: ${error.message}`);
+    res.send(`
+      <html>
+        <body style="font-family: Arial; padding: 20px; text-align: center;">
+          <h1 style="color: red;">❌ Authentication Failed</h1>
+          <p>Error: ${error.message}</p>
+          <p>Please try again.</p>
+        </body>
+      </html>
+    `);
   }
 });
 
@@ -346,7 +389,15 @@ app.get('/auth/url', (req, res) => {
 
 // Health check
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', oauth2Initialized: !!oauth2Client });
+  const isAuthenticated = oauth2Client?.credentials && 
+    (oauth2Client.credentials.access_token || oauth2Client.credentials.refresh_token);
+  
+  res.json({ 
+    status: 'ok', 
+    oauth2Initialized: !!oauth2Client,
+    authenticated: isAuthenticated,
+    authUrl: isAuthenticated ? null : 'http://localhost:3000/auth/url'
+  });
 });
 
 app.listen(PORT, () => {

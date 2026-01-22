@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { MessageSquare, Send, X, Brain, Check, Clock, Calendar, Sparkles } from "lucide-react";
+import { MessageSquare, Send, X, Brain, Check, Clock, Calendar, Sparkles, ExternalLink } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import { ChatAction } from "./ChatAction";
 import { Button } from "@/app/components/ui/button";
 import { Card } from "@/app/components/ui/card";
 import { Input } from "@/app/components/ui/input";
@@ -41,16 +43,19 @@ interface CalendarEvent {
 
 interface Message {
   id: string;
-  type: "user" | "agent" | "action";
+  type: "user" | "agent" | "action" | "auto-executed";
   content: string;
   timestamp: Date;
   action?: {
     type: "move" | "cancel" | "add" | "suggest";
     details: string;
-    status: "pending" | "approved" | "rejected";
+    status: "pending" | "approved" | "rejected" | "auto-executed";
     userRequest?: string; // Store the original user request for parsing
     onApprove?: () => void;
     onReject?: () => void;
+    eventId?: string; // For undo functionality
+    priority?: "hard-block" | "flexible" | "optional"; // Hard Block vs Nice to Have
+    googleCalendarLink?: string; // Deep link to Google Calendar event
   };
 }
 
@@ -62,19 +67,19 @@ interface NexusChatbotProps {
 
 export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHidden = false }: NexusChatbotProps) {
   const [isOpen, setIsOpen] = useState(false);
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "1",
-      type: "agent",
-      content: "Good morning. I'm your Nexus Executive Agent. I can help you optimize your schedule, manage conflicts, and maximize your Triple Bottom Line. What would you like to adjust today?",
-      timestamp: new Date(),
-    },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [calendarEvents, setCalendarEvents] = useState<ParsedEvent[]>([]); // Context-awareness: calendar events for relevant period
+  const [sessionState, setSessionState] = useState<{
+    lastUpdate?: Date;
+    lastEvents?: ParsedEvent[];
+    lastAction?: string;
+  }>({}); // Maintain session state to prevent amnesia
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const isProcessingRef = useRef(false); // Prevent duplicate submissions
+  const currentMessageIdRef = useRef<string | null>(null); // Track current response ID
   
   // Use MCP server hook for Google Calendar
   const { connected, loading: mcpLoading, error: mcpError, callTool, connect } = useMcpServer('google-calendar');
@@ -195,7 +200,7 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
   // Parse date references from user input (tomorrow, next week, Monday, etc.)
   const parseDateFromInput = (userInput: string): { startDate: Date; endDate: Date } => {
     const lower = userInput.toLowerCase();
-    const today = getToday(); // Use global "today" (Jan 21, 2026)
+    const today = getToday(); // Use actual system date
     let targetDate = new Date(today);
     
     // Check for specific date references
@@ -246,7 +251,7 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
     
     try {
       // Default to current week if no date range specified (using global "today")
-      const today = getToday(); // Use global "today" (Jan 21, 2026)
+      const today = getToday(); // Use actual system date
       const startDate = dateRange?.startDate || startOfWeek(today, { weekStartsOn: 1 });
       const endDate = dateRange?.endDate || endOfWeek(today, { weekStartsOn: 1 });
       
@@ -270,11 +275,35 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
     }
   }, [connected, callTool, connect]);
 
+  // Generate simple welcome message with priority ranking
+  const generatePersonalizedGreeting = useCallback(() => {
+    setMessages((prevMessages) => {
+      if (prevMessages.length === 0 || (prevMessages.length === 1 && prevMessages[0].type === "agent")) {
+        return [{
+          id: "1",
+          type: "agent",
+          content: "Hi! I am Kaisey, tell me your priority and I'll optimize your schedule",
+          timestamp: new Date(),
+        }];
+      }
+      return prevMessages;
+    });
+  }, []);
+
   // Load current week's events when component mounts and MCP is connected
   useEffect(() => {
     if (connected && !mcpLoading) {
-      loadCalendarEvents();
+      loadCalendarEvents().then((events) => {
+        // Update session state with loaded events
+        setSessionState(prev => ({
+          ...prev,
+          lastEvents: events,
+        }));
+        
+        // Greeting is generated separately on mount
+      });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected, mcpLoading, loadCalendarEvents]);
 
   // Connect to MCP on mount
@@ -368,19 +397,25 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
       ).join('\n')}\n\nUse this calendar information to make informed suggestions. Consider conflicts, priorities, and tradeoffs.`;
     }
 
-    const systemPrompt = `You are the Nexus Executive Agent, an AI assistant helping MBA students optimize their schedule to maximize the Triple Bottom Line: Academic Excellence, Professional Networking, and Personal Well-being.
+    const systemPrompt = `You are Kaisey, an AI assistant helping MBA students optimize their schedules.
 
-Your role is to:
-- Help users optimize their schedule based on their stated priorities
-- Consider tradeoffs when making suggestions (e.g., moving a study session might affect academic performance, but could create space for networking)
-- Analyze calendar conflicts and suggest solutions
-- Provide specific, actionable suggestions (e.g., "I recommend moving [Event X] from [Time A] to [Time B] to accommodate [Priority Y]")
-- When suggesting actions, explain the reasoning and tradeoffs clearly
-- Be concise, professional, and action-oriented
+**Core Principles:**
+- Be concise: Start with 1-2 sentence summary, then provide details only if needed
+- Be actionable: Suggest specific changes with clear reasoning
+- Be conversational: Use friendly, natural language (e.g., "Hey!" instead of "Good morning")
+- Remember context: ALWAYS maintain awareness of the current calendar state. If you just updated the calendar, reference the new state directly without asking the user to re-list events.
+
+**Response Format:**
+1. **Summary** (1-2 sentences): High-level recommendation
+2. **Details** (if needed): Specific changes in a bulleted list
+3. **Reasoning** (if needed): Brief explanation of tradeoffs
 
 ${calendarContextText}
 
-When suggesting actions (moving, canceling, adding events), format your response clearly so the user understands what action you're proposing and why it benefits their stated priorities.`;
+**When suggesting actions:** 
+- For simple additions (dinner, casual meetings, personal events): Just do it and confirm. Don't ask for approval or provide lengthy reasoning.
+- For complex moves that impact hard blocks (classes, interviews, exams): Explain the impact and ask for approval.
+- NEVER ask the user to "provide your schedule" or "list your events" if you have access to calendar data or just updated it. Use the calendar context provided.`;
 
     try {
       const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -419,6 +454,14 @@ When suggesting actions (moving, canceling, adding events), format your response
     const messageToSend = externalMessage || inputValue.trim();
     if (!messageToSend) return;
 
+    // Prevent duplicate submissions
+    if (isProcessingRef.current || isTyping) {
+      console.warn("Already processing a message, ignoring duplicate request");
+      return;
+    }
+
+    isProcessingRef.current = true;
+    
     if (!externalMessage) {
       setInputValue("");
     }
@@ -446,18 +489,26 @@ When suggesting actions (moving, canceling, adding events), format your response
       const conversationHistory = previousMessages
         .filter(msg => {
           // Include user and agent messages
-          if (msg.type === "user" || msg.type === "agent") return true;
-          // Include action messages that have been resolved (approved/rejected)
+          if (msg.type === "user" || msg.type === "agent" || msg.type === "auto-executed") return true;
+          // Include action messages that have been resolved (approved/rejected/auto-executed)
           if (msg.type === "action" && msg.action?.status !== "pending") return true;
           return false;
         })
         .map(msg => {
           // Convert action messages to assistant messages for the API
           if (msg.type === "action" && msg.action?.status !== "pending") {
-            const statusText = msg.action.status === "approved" ? " (approved)" : " (declined)";
+            const statusText = msg.action.status === "approved" ? " (approved)" : 
+                             msg.action.status === "auto-executed" ? " (executed)" : " (declined)";
             return {
               role: "assistant" as const,
               content: msg.content + statusText,
+            };
+          }
+          // Include auto-executed messages as assistant messages
+          if (msg.type === "auto-executed") {
+            return {
+              role: "assistant" as const,
+              content: msg.content,
             };
           }
           return {
@@ -465,6 +516,15 @@ When suggesting actions (moving, canceling, adding events), format your response
             content: msg.content,
           };
         });
+
+      // Add session state context to prevent amnesia
+      let sessionContext = "";
+      if (sessionState.lastUpdate && sessionState.lastEvents) {
+        const timeSinceUpdate = (Date.now() - sessionState.lastUpdate.getTime()) / 1000 / 60; // minutes
+        if (timeSinceUpdate < 5) { // If updated in last 5 minutes
+          sessionContext = `\n\nIMPORTANT: I just ${sessionState.lastAction || 'updated'} your calendar ${Math.round(timeSinceUpdate)} minute(s) ago. The current calendar state includes: ${sessionState.lastEvents.map(e => `${e.title} at ${e.time}`).join(', ')}. Do NOT ask the user to re-list their schedule - use this information directly.`;
+        }
+      }
 
       // Parse date range from user input and load relevant events
       const dateRange = parseDateFromInput(messageToSend);
@@ -475,8 +535,9 @@ When suggesting actions (moving, canceling, adding events), format your response
       // Ensure relevantEvents is an array (defensive programming)
       const eventsArray = Array.isArray(relevantEvents) ? relevantEvents : [];
 
-      // Call OpenAI API with calendar context
-      const aiResponse = await callOpenAI(messageToSend, conversationHistory, eventsArray.length > 0 ? eventsArray : undefined);
+      // Call OpenAI API with calendar context and session state
+      const userMessageWithContext = messageToSend + sessionContext;
+      const aiResponse = await callOpenAI(userMessageWithContext, conversationHistory, eventsArray.length > 0 ? eventsArray : undefined);
 
       // Parse response to determine if it's an action or regular message
       // Only mark as action if it's clearly proposing a concrete, actionable change
@@ -500,6 +561,14 @@ When suggesting actions (moving, canceling, adding events), format your response
         suggest: /(?:i recommend|i suggest|you should).*(?:move|cancel|add|reschedule|optimize)/,
       };
       
+      // Determine if this is a simple addition (low-stakes) or complex operation (requires approval)
+      const isSimpleAddition = hasScheduleIntent && !hasInsteadOfIntent && 
+        !/(?:move|reschedule|shift|cancel|delete|replace|instead)/i.test(messageToSend);
+      
+      // Check if action impacts hard blocks (requires approval)
+      const impactsHardBlocks = /(?:class|meeting|interview|exam|deadline)/i.test(messageToSend) ||
+        actionPatterns.move.test(lowerResponse) || actionPatterns.cancel.test(lowerResponse);
+
       // If user explicitly uses scheduling keywords, mark as "add" action
       if (hasScheduleIntent && !hasInsteadOfIntent) {
         actionType = "add";
@@ -520,40 +589,184 @@ When suggesting actions (moving, canceling, adding events), format your response
         actionDetails = "Optimization suggestion";
       }
 
-      const agentMessage: Message = actionType
-        ? {
-            id: (Date.now() + 1).toString(),
-            type: "action",
-            content: aiResponse,
-            timestamp: new Date(),
-            action: {
-              type: actionType,
-              details: actionDetails,
-              status: "pending",
-              userRequest: messageToSend, // Store user's original request for parsing
-            },
-          }
-        : {
-            id: (Date.now() + 1).toString(),
-            type: "agent",
-            content: aiResponse,
-            timestamp: new Date(),
-          };
+      // For simple additions, auto-execute without approval
+      const shouldAutoExecute = isSimpleAddition && actionType === "add" && !impactsHardBlocks;
 
-      setMessages((prev) => [...prev, agentMessage]);
+      // Generate unique message ID and track it
+      const messageId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      currentMessageIdRef.current = messageId;
+
+      // Check if this message ID was already added (prevent duplicates)
+      setMessages((prev) => {
+        const existingMessage = prev.find((m) => m.id === messageId);
+        if (existingMessage) {
+          console.warn("Duplicate message ID detected, skipping");
+          return prev;
+        }
+
+        // For simple additions, auto-execute immediately
+        if (shouldAutoExecute) {
+          // Parse and execute the addition
+          const eventDetails = parseEventDetails(messageToSend);
+          if (eventDetails && connected) {
+            // Return temporary message, will be updated after execution
+            const tempMessage: Message = {
+              id: messageId,
+              type: "agent",
+              content: `Adding "${eventDetails.title}" to your calendar...`,
+              timestamp: new Date(),
+            };
+
+            // Determine priority from user input (default to "flexible" for simple additions)
+            const isHardBlock = /(?:class|meeting|interview|exam|deadline|must|required|critical)/i.test(messageToSend);
+            const priority = isHardBlock ? "hard-block" : "flexible";
+            
+            // Auto-execute: create event immediately (async, don't await)
+            callTool('create_event', {
+              calendarId: 'primary',
+              summary: eventDetails.title,
+              description: `Added via Kaisey: ${messageToSend}\nPriority: ${priority}`,
+              start: { dateTime: eventDetails.start.toISOString() },
+              end: { dateTime: eventDetails.end.toISOString() },
+            }).then(async (response: any) => {
+              // Get event ID from response for undo functionality
+              let createdEventId: string | undefined;
+              if (typeof response === 'string') {
+                try {
+                  const parsed = JSON.parse(response);
+                  createdEventId = parsed?.id;
+                } catch (e) {
+                  // Response might be event ID directly
+                  createdEventId = response;
+                }
+              } else if (response?.id) {
+                createdEventId = response.id;
+              }
+              
+              // Generate Google Calendar deep link
+              const googleCalendarLink = createdEventId 
+                ? `https://calendar.google.com/calendar/event?eid=${encodeURIComponent(createdEventId)}`
+                : undefined;
+
+              // Reload calendar to update state
+              const updatedEvents = await loadCalendarEvents();
+              setSessionState(prev => ({
+                ...prev,
+                lastUpdate: new Date(),
+                lastEvents: updatedEvents,
+                lastAction: "add",
+              }));
+
+              // Import toast for undo functionality
+              const { toast: toastFn } = await import("sonner");
+              
+              // Show toast with undo option
+              toastFn.success("Event added to calendar", {
+                description: `${eventDetails.title} scheduled for ${format(eventDetails.start, 'h:mm a')}`,
+                action: {
+                  label: "Undo",
+                  onClick: async () => {
+                    if (createdEventId) {
+                      try {
+                        await callTool('delete_event', {
+                          calendarId: 'primary',
+                          eventId: createdEventId,
+                        });
+                        await loadCalendarEvents();
+                        toastFn.success("Event removed");
+                      } catch (e) {
+                        console.error("Error undoing event:", e);
+                      }
+                    }
+                  },
+                },
+              });
+
+              // Update message to show auto-executed status
+              setMessages((prev) => prev.map((msg) => 
+                msg.id === messageId 
+                  ? {
+                      ...msg,
+                      type: "auto-executed" as const,
+                      content: `✓ Added "${eventDetails.title}" at ${format(eventDetails.start, 'h:mm a')}. ${googleCalendarLink ? `[View in Google Calendar](${googleCalendarLink})` : ''}`,
+                      action: {
+                        type: "add",
+                        details: "Event added",
+                        status: "auto-executed",
+                        userRequest: messageToSend,
+                        eventId: createdEventId,
+                        googleCalendarLink,
+                        priority: priority as "hard-block" | "flexible" | "optional",
+                      },
+                    }
+                  : msg
+              ));
+            }).catch((error) => {
+              console.error("Error auto-executing event:", error);
+              const { toast: toastFn } = require("sonner");
+              toastFn.error("Failed to add event", {
+                description: error.message || "Please try again",
+              });
+              
+              // Update message to show error
+              setMessages((prev) => prev.map((msg) => 
+                msg.id === messageId 
+                  ? {
+                      ...msg,
+                      content: `Sorry, I couldn't add that event. ${error.message || "Please try again."}`,
+                    }
+                  : msg
+              ));
+            });
+
+            return [...prev, tempMessage];
+          }
+        }
+
+        const agentMessage: Message = actionType
+          ? {
+              id: messageId,
+              type: "action",
+              content: aiResponse,
+              timestamp: new Date(),
+              action: {
+                type: actionType,
+                details: actionDetails,
+                status: "pending",
+                userRequest: messageToSend, // Store user's original request for parsing
+              },
+            }
+          : {
+              id: messageId,
+              type: "agent",
+              content: aiResponse,
+              timestamp: new Date(),
+            };
+
+        return [...prev, agentMessage];
+      });
     } catch (error) {
       console.error("Error calling OpenAI:", error);
+      const errorMessageId = `${Date.now()}-error-${Math.random().toString(36).substr(2, 9)}`;
       const errorMessage: Message = {
-        id: (Date.now() + 1).toString(),
+        id: errorMessageId,
         type: "agent",
         content: error instanceof Error 
           ? `I apologize, but I encountered an error: ${error.message}. Please check your API key configuration.`
           : "I apologize, but I encountered an error. Please try again.",
         timestamp: new Date(),
       };
-      setMessages((prev) => [...prev, errorMessage]);
+      setMessages((prev) => {
+        // Prevent duplicate error messages
+        if (prev.some((m) => m.id === errorMessageId)) {
+          return prev;
+        }
+        return [...prev, errorMessage];
+      });
     } finally {
       setIsTyping(false);
+      isProcessingRef.current = false;
+      currentMessageIdRef.current = null;
     }
   };
 
@@ -583,7 +796,7 @@ When suggesting actions (moving, canceling, adding events), format your response
     }
     
     // Determine date from user input (use same logic as parseDateFromInput)
-    const today = new Date();
+    const today = getToday(); // Use actual system date
     let eventDate = new Date(today);
     
     // Check for specific date references
@@ -673,17 +886,25 @@ When suggesting actions (moving, canceling, adding events), format your response
           await connect();
         }
         
+        let createdEventId: string | undefined;
+        let googleCalendarLink: string | undefined;
+        
         // Execute calendar operation based on action type
         if (message.action.type === "add" && message.action.userRequest) {
           // Parse event details from user request
           const eventDetails = parseEventDetails(message.action.userRequest);
           
           if (eventDetails) {
+            // Determine priority (default to flexible unless specified or detected from user input)
+            const userRequest = message.action?.userRequest || "";
+            const isHardBlock = /(?:class|meeting|interview|exam|deadline|must|required|critical)/i.test(userRequest);
+            const priority = message.action?.priority || (isHardBlock ? "hard-block" : "flexible");
+            
             // Use MCP create_event tool
-            await callTool('create_event', {
+            const response = await callTool('create_event', {
               calendarId: 'primary',
               summary: eventDetails.title,
-              description: 'Created via Nexus Agent',
+              description: `Created via Kaisey\nPriority: ${priority}`,
               start: {
                 dateTime: eventDetails.start.toISOString(),
               },
@@ -692,28 +913,81 @@ When suggesting actions (moving, canceling, adding events), format your response
               },
             });
             
-            // Reload calendar events to refresh context
-            await loadCalendarEvents();
+            // Extract event ID and create Google Calendar link
+            createdEventId = response?.id || (typeof response === 'string' ? JSON.parse(response)?.id : undefined);
+            if (createdEventId) {
+              googleCalendarLink = `https://calendar.google.com/calendar/event?eid=${encodeURIComponent(createdEventId)}`;
+            }
+            
+            // Reload calendar events to refresh context and update session state
+            const updatedEvents = await loadCalendarEvents();
+            setSessionState(prev => ({
+              ...prev,
+              lastUpdate: new Date(),
+              lastEvents: updatedEvents,
+              lastAction: "add",
+            }));
+            
+            // Refresh greeting with updated events
+            if (updatedEvents.length > 0) {
+              generatePersonalizedGreeting(updatedEvents);
+            }
             
             // Notify parent component
             if (onScheduleChange) {
               onScheduleChange(message.action.type, `Created event: ${eventDetails.title} at ${eventDetails.start.toLocaleTimeString()}`);
             }
             
-            // Add success message
+            // Add success message with sync status
             setTimeout(() => {
               setMessages((prev) => [
                 ...prev,
                 {
                   id: Date.now().toString(),
                   type: "agent",
-                  content: `✓ Calendar updated successfully. Created "${eventDetails.title}" at ${eventDetails.start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`,
+                  content: `✓ Synced to Google Calendar. Created "${eventDetails.title}" at ${eventDetails.start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.${googleCalendarLink ? ` [View event](${googleCalendarLink})` : ''}`,
                   timestamp: new Date(),
                 },
               ]);
             }, 500);
           } else {
             throw new Error('Could not parse event details from your request');
+          }
+        } else if (message.action.type === "move" && message.action.userRequest) {
+          // Handle move/reschedule
+          const eventDetails = parseEventDetails(message.action.userRequest);
+          if (eventDetails && message.action.eventId) {
+            await callTool('update_event', {
+              calendarId: 'primary',
+              eventId: message.action.eventId,
+              start: { dateTime: eventDetails.start.toISOString() },
+              end: { dateTime: eventDetails.end.toISOString() },
+            });
+            
+            const updatedEvents = await loadCalendarEvents();
+            setSessionState(prev => ({
+              ...prev,
+              lastUpdate: new Date(),
+              lastEvents: updatedEvents,
+              lastAction: "move",
+            }));
+            
+            // Refresh greeting with updated events
+            if (updatedEvents.length > 0) {
+              generatePersonalizedGreeting(updatedEvents);
+            }
+            
+            setTimeout(() => {
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: Date.now().toString(),
+                  type: "agent",
+                  content: "✓ Event rescheduled and synced to Google Calendar.",
+                  timestamp: new Date(),
+                },
+              ]);
+            }, 500);
           }
         } else {
           // For other action types, just notify
@@ -785,13 +1059,6 @@ When suggesting actions (moving, canceling, adding events), format your response
     (window as any).__nexusChatbotMessages = messages;
     (window as any).__nexusChatbotIsTyping = isTyping;
     (window as any).__nexusChatbotRefresh = async () => {
-      // Clear messages and reload calendar, but don't automatically send suggestions
-      setMessages([{
-        id: "1",
-        type: "agent",
-        content: "Good morning. I'm your Nexus Executive Agent. I can help you optimize your schedule, manage conflicts, and maximize your Triple Bottom Line. What would you like to adjust today?",
-        timestamp: new Date(),
-      }]);
       // Reload calendar in background (day, week, month)
       const today = getToday();
       const dayStart = startOfDay(today);
@@ -801,17 +1068,73 @@ When suggesting actions (moving, canceling, adding events), format your response
       const monthStart = startOfMonth(today);
       const monthEnd = endOfMonth(today);
       
-      await Promise.all([
+      const events = await Promise.all([
         loadCalendarEvents({ startDate: dayStart, endDate: dayEnd }),
         loadCalendarEvents({ startDate: weekStart, endDate: weekEnd }),
         loadCalendarEvents({ startDate: monthStart, endDate: monthEnd }),
       ]);
-      // Calendar is reloaded, but we wait for user to explicitly ask for suggestions
+      
+      // Update session state
+      setSessionState(prev => ({
+        ...prev,
+        lastUpdate: new Date(),
+        lastEvents: events[0], // Today's events
+      }));
+      
+      // Generate new personalized greeting
+      if (events[0] && events[0].length > 0) {
+        generatePersonalizedGreeting(events[0]);
+      } else {
+        setMessages([{
+          id: "1",
+          type: "agent",
+          content: "Hey! You've got a free day today. What would you like to plan?",
+          timestamp: new Date(),
+        }]);
+      }
     };
     (window as any).__nexusChatbotLoadCalendar = loadCalendarEvents;
     (window as any).__nexusChatbotHandleApprove = handleApproveAction;
     (window as any).__nexusChatbotHandleReject = handleRejectAction;
     (window as any).__nexusChatbotGenerateSuggestions = generateInitialSuggestions;
+    (window as any).__nexusChatbotGenerateProactiveRecommendations = async () => {
+      // Generate proactive recommendations when chat opens
+      try {
+        const today = getToday();
+        const dayStart = startOfDay(today);
+        const dayEnd = endOfDay(today);
+        dayStart.setHours(0, 0, 0, 0);
+        dayEnd.setHours(23, 59, 59, 999);
+
+        const events = await loadCalendarEvents({ startDate: dayStart, endDate: dayEnd });
+        
+        if (events.length > 0) {
+          const suggestions = generateInitialSuggestions(events);
+          if (suggestions.length > 0) {
+            // Send first recommendation as an actionable message
+            const recommendationText = `I've analyzed your schedule for today. ${suggestions[0]}\n\nWould you like me to implement this change?`;
+            
+            // Create an action message with approve/reject buttons
+            const actionMessage: Message = {
+              id: Date.now().toString(),
+              type: "action",
+              content: recommendationText,
+              timestamp: new Date(),
+              action: {
+                type: "suggest",
+                details: "Schedule optimization",
+                status: "pending",
+                userRequest: "Analyze today's schedule and suggest improvements",
+              },
+            };
+            
+            setMessages((prev) => [...prev, actionMessage]);
+          }
+        }
+      } catch (error) {
+        console.error("Error generating proactive recommendations:", error);
+      }
+    };
     return () => {
       delete (window as any).__nexusChatbotSendMessage;
       delete (window as any).__nexusChatbotMessages;
@@ -821,8 +1144,9 @@ When suggesting actions (moving, canceling, adding events), format your response
       delete (window as any).__nexusChatbotHandleApprove;
       delete (window as any).__nexusChatbotHandleReject;
       delete (window as any).__nexusChatbotGenerateSuggestions;
+      delete (window as any).__nexusChatbotGenerateProactiveRecommendations;
     };
-  }, [messages, isTyping, loadCalendarEvents, generateInitialSuggestions]);
+  }, [messages, isTyping, loadCalendarEvents, generateInitialSuggestions, generatePersonalizedGreeting, sessionState]);
 
   // If hidden mode, just expose the send function and return null
   if (isHidden) {
@@ -891,15 +1215,62 @@ When suggesting actions (moving, canceling, adding events), format your response
                           </span>
                         </div>
                       </div>
-                    ) : message.type === "agent" ? (
+                    ) : message.type === "agent" || message.type === "auto-executed" ? (
                       <div className="flex gap-2">
                         <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center shrink-0">
                           <Brain className="w-4 h-4 text-white" />
                         </div>
                         <div className="max-w-[80%]">
-                          <div className="rounded-lg bg-muted p-3">
-                            <p className="text-sm whitespace-pre-line">{message.content}</p>
-                            <span className="text-xs text-muted-foreground mt-1 block">
+                          <div className={`rounded-lg p-3 ${
+                            message.type === "auto-executed" 
+                              ? "bg-green-50 border border-green-200" 
+                              : "bg-muted"
+                          }`}>
+                            <div className="text-sm prose prose-sm max-w-none dark:prose-invert">
+                              <ReactMarkdown
+                                components={{
+                                  p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                                  ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>,
+                                  ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>,
+                                  li: ({ children }) => <li className="text-sm">{children}</li>,
+                                  strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+                                  h1: ({ children }) => <h1 className="text-base font-bold mb-2">{children}</h1>,
+                                  h2: ({ children }) => <h2 className="text-sm font-semibold mb-1.5">{children}</h2>,
+                                  h3: ({ children }) => <h3 className="text-sm font-medium mb-1">{children}</h3>,
+                                  a: ({ href, children }) => (
+                                    <a 
+                                      href={href} 
+                                      target="_blank" 
+                                      rel="noopener noreferrer"
+                                      className="text-blue-600 hover:text-blue-800 underline inline-flex items-center gap-1"
+                                    >
+                                      {children}
+                                      <ExternalLink className="w-3 h-3" />
+                                    </a>
+                                  ),
+                                }}
+                              >
+                                {message.content}
+                              </ReactMarkdown>
+                            </div>
+                            {message.type === "auto-executed" && message.action?.googleCalendarLink && (
+                              <div className="mt-2 flex items-center gap-2">
+                                <Badge className="bg-green-500 text-white text-xs">
+                                  <Check className="w-3 h-3 mr-1" />
+                                  Synced to Google
+                                </Badge>
+                                <a
+                                  href={message.action.googleCalendarLink}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
+                                >
+                                  View in Google Calendar
+                                  <ExternalLink className="w-3 h-3" />
+                                </a>
+                              </div>
+                            )}
+                            <span className="text-xs text-muted-foreground mt-2 block">
                               {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </span>
                           </div>
@@ -914,7 +1285,7 @@ When suggesting actions (moving, canceling, adding events), format your response
                         <div className="max-w-[80%] flex-1">
                           <div className="rounded-lg border-2 border-blue-500 bg-blue-500/5 p-3">
                             <div className="flex items-start gap-2 mb-2">
-                              <Badge className="bg-blue-500">
+                              <Badge className="bg-blue-500 text-white">
                                 {message.action?.type === "move" && <Clock className="w-3 h-3 mr-1" />}
                                 {message.action?.type === "cancel" && <X className="w-3 h-3 mr-1" />}
                                 {message.action?.type === "add" && <Calendar className="w-3 h-3 mr-1" />}
@@ -922,43 +1293,27 @@ When suggesting actions (moving, canceling, adding events), format your response
                                 {message.action?.type}
                               </Badge>
                             </div>
-                            <p className="text-sm mb-3">{message.content}</p>
+                            <div className="text-sm prose prose-sm max-w-none dark:prose-invert mb-2">
+                              <ReactMarkdown
+                                components={{
+                                  p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                                  ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>,
+                                  ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>,
+                                  li: ({ children }) => <li className="text-sm">{children}</li>,
+                                  strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+                                }}
+                              >
+                                {message.content}
+                              </ReactMarkdown>
+                            </div>
                             
-                            {message.action?.status === "pending" && (
-                              <div className="flex gap-2">
-                                <Button
-                                  size="sm"
-                                  onClick={() => handleApproveAction(message.id)}
-                                  className="flex-1 bg-green-500 hover:bg-green-600 text-white"
-                                >
-                                  <Check className="w-3 h-3 mr-1" />
-                                  Approve
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => handleRejectAction(message.id)}
-                                  className="flex-1"
-                                >
-                                  <X className="w-3 h-3 mr-1" />
-                                  Decline
-                                </Button>
-                              </div>
-                            )}
-                            
-                            {message.action?.status === "approved" && (
-                              <div className="flex items-center gap-2 text-green-600 text-sm font-semibold">
-                                <Check className="w-4 h-4" />
-                                Approved & Executed
-                              </div>
-                            )}
-                            
-                            {message.action?.status === "rejected" && (
-                              <div className="flex items-center gap-2 text-muted-foreground text-sm">
-                                <X className="w-4 h-4" />
-                                Declined
-                              </div>
-                            )}
+                            <ChatAction
+                              onApprove={() => handleApproveAction(message.id)}
+                              onReject={() => handleRejectAction(message.id)}
+                              disabled={message.action?.status !== "pending"}
+                              approved={message.action?.status === "approved"}
+                              rejected={message.action?.status === "rejected"}
+                            />
                           </div>
                         </div>
                       </div>
@@ -969,13 +1324,16 @@ When suggesting actions (moving, canceling, adding events), format your response
                 {isTyping && (
                   <div className="flex gap-2">
                     <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center shrink-0">
-                      <Brain className="w-4 h-4 text-white" />
+                      <Brain className="w-4 h-4 text-white animate-pulse" />
                     </div>
                     <div className="rounded-lg bg-muted p-3">
-                      <div className="flex gap-1">
-                        <span className="w-2 h-2 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: "0ms" }}></span>
-                        <span className="w-2 h-2 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: "150ms" }}></span>
-                        <span className="w-2 h-2 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: "300ms" }}></span>
+                      <div className="flex items-center gap-2">
+                        <div className="flex gap-1">
+                          <span className="w-2 h-2 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: "0ms" }}></span>
+                          <span className="w-2 h-2 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: "150ms" }}></span>
+                          <span className="w-2 h-2 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: "300ms" }}></span>
+                        </div>
+                        <span className="text-xs text-muted-foreground">Analyzing schedule...</span>
                       </div>
                     </div>
                   </div>
@@ -995,10 +1353,11 @@ When suggesting actions (moving, canceling, adding events), format your response
                   onKeyPress={handleKeyPress}
                   placeholder="Ask me to adjust your schedule..."
                   className="flex-1"
+                  disabled={isTyping || isProcessingRef.current}
                 />
                 <Button
                   onClick={handleSendMessage}
-                  disabled={!inputValue.trim()}
+                  disabled={!inputValue.trim() || isTyping || isProcessingRef.current}
                   className="bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600"
                 >
                   <Send className="w-4 h-4" />
