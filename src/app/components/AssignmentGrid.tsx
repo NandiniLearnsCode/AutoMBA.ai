@@ -6,7 +6,8 @@ import { Button } from "@/app/components/ui/button";
 import { ScheduleAssignmentDialog } from "./ScheduleAssignmentDialog";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useMcpServer } from "@/hooks/useMcpServer";
-import { format, parseISO, isPast, isToday, addDays } from "date-fns";
+import { format, parseISO, isPast, isToday, addDays, startOfMonth, endOfMonth, isWithinInterval } from "date-fns";
+import { getToday } from "@/utils/dateUtils";
 
 interface Assignment {
   id: string;
@@ -233,8 +234,31 @@ export function AssignmentGrid() {
       const canvasAssignments = parseCanvasResponse(response);
       console.log(`✅ Found ${canvasAssignments.length} Canvas assignments in ${Date.now() - startTime}ms`);
 
+      // Filter to only show assignments for the current month BEFORE converting
+      const today = getToday();
+      const monthStart = startOfMonth(today);
+      const monthEnd = endOfMonth(today);
+      monthEnd.setHours(23, 59, 59, 999); // Include the entire last day
+      
+      // Filter Canvas assignments by due date within current month
+      const currentMonthCanvasAssignments = canvasAssignments.filter((canvasAssignment) => {
+        if (!canvasAssignment.due_at) {
+          return false; // Exclude assignments without due dates
+        }
+        
+        try {
+          const dueDate = parseISO(canvasAssignment.due_at);
+          // Check if due date is within the current month
+          return isWithinInterval(dueDate, { start: monthStart, end: monthEnd });
+        } catch {
+          return false;
+        }
+      });
+      
+      console.log(`📅 Filtered to ${currentMonthCanvasAssignments.length} assignments for ${format(today, 'MMMM yyyy')}`);
+
       // Convert to our format and filter out nulls
-      const converted = canvasAssignments
+      const converted = currentMonthCanvasAssignments
         .map(convertCanvasAssignment)
         .filter((a): a is Assignment => a !== null);
 
@@ -249,8 +273,8 @@ export function AssignmentGrid() {
       assignmentsCountRef.current = converted.length;
       lastFetchTimeRef.current = Date.now();
       
-      if (converted.length === 0 && canvasAssignments.length === 0) {
-        console.warn('⚠️ No Canvas assignments found.');
+      if (converted.length === 0 && currentMonthCanvasAssignments.length === 0) {
+        console.warn(`⚠️ No Canvas assignments found for ${format(today, 'MMMM yyyy')}.`);
       }
     } catch (error: any) {
       console.error('❌ Error fetching Canvas assignments:', error);
@@ -287,7 +311,10 @@ export function AssignmentGrid() {
   return (
     <Card className="p-4">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="font-semibold">Canvas Assignments</h3>
+        <div>
+          <h3 className="font-semibold">Canvas Assignments</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">{format(getToday(), 'MMMM yyyy')}</p>
+        </div>
         <div className="flex items-center gap-2">
           {loadingAssignments && (
             <Badge variant="outline" className="text-xs">Loading...</Badge>
@@ -334,8 +361,8 @@ export function AssignmentGrid() {
         )}
         {assignments.length === 0 && !loadingAssignments && hasTriedFetch && !connectionError && (
           <div className="text-center py-8 text-sm text-muted-foreground">
-            <p>No assignments found.</p>
-            <p className="text-xs mt-1">Make sure Canvas is connected and you have active assignments.</p>
+            <p>No assignments found for {format(getToday(), 'MMMM yyyy')}.</p>
+            <p className="text-xs mt-1">Make sure Canvas is connected and you have assignments due this month.</p>
             <p className="text-xs mt-1">Check browser console (F12) for details.</p>
           </div>
         )}
