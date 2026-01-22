@@ -192,7 +192,7 @@ export function NexusChatbot({ onScheduleChange }: NexusChatbotProps) {
   // Parse date references from user input (tomorrow, next week, Monday, etc.)
   const parseDateFromInput = (userInput: string): { startDate: Date; endDate: Date } => {
     const lower = userInput.toLowerCase();
-    const today = new Date();
+    const today = getToday(); // Use global "today" (Jan 21, 2026)
     let targetDate = new Date(today);
     
     // Check for specific date references
@@ -242,8 +242,8 @@ export function NexusChatbot({ onScheduleChange }: NexusChatbotProps) {
     }
     
     try {
-      // Default to current week if no date range specified
-      const today = new Date();
+      // Default to current week if no date range specified (using global "today")
+      const today = getToday(); // Use global "today" (Jan 21, 2026)
       const startDate = dateRange?.startDate || startOfWeek(today, { weekStartsOn: 1 });
       const endDate = dateRange?.endDate || endOfWeek(today, { weekStartsOn: 1 });
       
@@ -431,13 +431,26 @@ When suggesting actions (moving, canceling, adding events), format your response
       let actionType: "move" | "cancel" | "add" | "suggest" | undefined;
       let actionDetails = "";
 
+      // Enhanced intent parsing for scheduling keywords
+      const lowerInput = userInput.toLowerCase();
+      
+      // Check for specific scheduling intents
+      const hasScheduleIntent = /schedule|block time|study for/i.test(userInput);
+      const hasInsteadOfIntent = /instead of|replace/i.test(userInput);
+      
       // More conservative detection - only mark as action if it's proposing a specific action
       const actionPatterns = {
         move: /(?:i can|i'll|let me|i recommend|i suggest).*(?:move|reschedule|shift)/,
         cancel: /(?:i can|i'll|let me|i recommend|i suggest).*(?:cancel|remove|delete)/,
-        add: /(?:i can|i'll|let me|i recommend|i suggest).*(?:add|schedule|block|create)/,
+        add: /(?:i can|i'll|let me|i recommend|i suggest|schedule|block time).*(?:add|schedule|block|create|study for)/,
         suggest: /(?:i recommend|i suggest|you should).*(?:move|cancel|add|reschedule|optimize)/,
       };
+      
+      // If user explicitly uses scheduling keywords, mark as "add" action
+      if (hasScheduleIntent && !hasInsteadOfIntent) {
+        actionType = "add";
+        actionDetails = "Schedule event";
+      }
 
       if (actionPatterns.move.test(lowerResponse)) {
         actionType = "move";

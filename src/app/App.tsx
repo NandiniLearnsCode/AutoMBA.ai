@@ -24,26 +24,74 @@ function AppContent() {
   
   const [viewMode, setViewMode] = useState<"focus" | "strategy" | "recovery">("focus");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [suggestions, setSuggestions] = useState([
+  
+  // Initialize suggestions with buffer-based logic and urgency detection
+  const [suggestions, setSuggestions] = useState<
+    Array<{
+      id: string;
+      type: "buffer" | "urgency" | "shift" | "optimization" | "alert" | "success";
+      title: string;
+      description: string;
+      assignmentId?: string;
+      eventId?: string;
+    }>
+  >([
     {
       id: "1",
-      type: "conflict" as const,
-      title: "Schedule Conflict Detected",
-      description: "Goldman Sachs Info Session overlaps with your scheduled gym session at 12:00 PM. Low HRV indicates you need recovery time.",
+      type: "shift" as const,
+      title: "Shift Gym Session",
+      description: "Goldman Sachs Info Session at 1:00 PM overlaps with your scheduled gym session at 1:00 PM. Low HRV indicates you need recovery time. Move gym session to 2:00 PM to create a buffer.",
+      eventId: "gym-session-1",
     },
     {
       id: "2",
-      type: "optimization" as const,
-      title: "Time Block Optimization Available",
-      description: "Based on your biometrics (5.2h sleep, low HRV), I can move the Valuation Case Study deep work to tomorrow morning when your cognitive performance is typically 34% higher.",
+      type: "urgency" as const,
+      title: "Urgent Assignment Due Tomorrow",
+      description: "Valuation Case Study (Corporate Finance) is due in less than 48 hours and is only 35% complete. Schedule 2 hours to complete it.",
+      assignmentId: "1",
     },
   ]);
 
-  const handleAcceptSuggestion = (id: string) => {
-    setSuggestions(suggestions.filter((s) => s.id !== id));
-    toast.success("Calendar updated successfully", {
-      description: "Your schedule has been optimized by Nexus Agent.",
-    });
+  const handleAcceptSuggestion = async (id: string, suggestionData?: {
+    assignmentId?: string;
+    eventId?: string;
+    type?: string;
+  }) => {
+    const suggestion = suggestions.find((s) => s.id === id);
+    if (!suggestion) return;
+
+    try {
+      // Handle assignment scheduling (type: 'study')
+      if (suggestion.type === "urgency" && suggestionData?.assignmentId) {
+        // Get assignment data (in real app, would fetch from state/context)
+        // For now, we'll create a default study block
+        // This would typically use MCP create_event with type: 'study'
+        toast.success("Study time scheduled", {
+          description: "2-hour study block added to your calendar.",
+        });
+      }
+      
+      // Handle event shifting (Gym session shift)
+      if (suggestion.type === "shift" && suggestionData?.eventId) {
+        // Shift event by +60 minutes (1 hour)
+        // This would typically use MCP update_event
+        toast.success("Event shifted", {
+          description: "Gym session moved to 2:00 PM to create recovery buffer.",
+        });
+      }
+      
+      // Remove suggestion
+      setSuggestions(suggestions.filter((s) => s.id !== id));
+      
+      toast.success("Calendar updated successfully", {
+        description: "Your schedule has been optimized by Nexus Agent.",
+      });
+    } catch (error) {
+      console.error("Error accepting suggestion:", error);
+      toast.error("Failed to update calendar", {
+        description: "Please try again.",
+      });
+    }
   };
 
   const handleDismissSuggestion = (id: string) => {
@@ -156,12 +204,16 @@ function AppContent() {
             {suggestions.map((suggestion) => (
               <AgentSuggestion
                 key={suggestion.id}
-                type={suggestion.type}
+                type={suggestion.type === "buffer" ? "alert" : suggestion.type === "urgency" ? "alert" : suggestion.type === "shift" ? "optimization" : suggestion.type}
                 title={suggestion.title}
                 description={suggestion.description}
                 action={{
-                  label: "Accept & Update Calendar",
-                  onClick: () => handleAcceptSuggestion(suggestion.id),
+                  label: suggestion.type === "urgency" ? "Schedule 2 Hours" : suggestion.type === "shift" ? "Shift to 2:00 PM" : "Accept & Update Calendar",
+                  onClick: () => handleAcceptSuggestion(suggestion.id, {
+                    assignmentId: suggestion.assignmentId,
+                    eventId: suggestion.eventId,
+                    type: suggestion.type,
+                  }),
                 }}
                 dismiss={() => handleDismissSuggestion(suggestion.id)}
               />

@@ -27,13 +27,13 @@ const weekData: DayOverview[] = [
     date: "Jan 20",
     metrics: { classes: 2, networking: 1, recruiting: 2, wellness: 1 },
     load: "heavy",
+    highlight: "Today",
   },
   {
     day: "Wed",
     date: "Jan 21",
     metrics: { classes: 2, networking: 3, recruiting: 0, wellness: 1 },
     load: "moderate",
-    highlight: "Today", // Wednesday, Jan 21, 2026 is "Today"
   },
   {
     day: "Thu",

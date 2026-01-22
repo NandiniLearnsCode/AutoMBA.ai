@@ -6,7 +6,8 @@ import { Button } from "@/app/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/app/components/ui/toggle-group";
 import { useMcpServer } from "@/hooks/useMcpServer";
 import { DndContext, DragEndEvent, useDraggable, useDroppable, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
-import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, eachDayOfInterval, addWeeks, subWeeks, addMonths, subMonths, isSameDay, isToday, isSameMonth } from "date-fns";
+import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, eachDayOfInterval, addWeeks, subWeeks, addMonths, subMonths, isSameDay, isSameMonth } from "date-fns";
+import { getToday, isToday as isTodayGlobal } from "@/utils/dateUtils";
 
 interface TimeBlock {
   id: string;
@@ -25,7 +26,7 @@ interface TimeBlock {
 const typeConfig = {
   class: { icon: GraduationCap, color: "bg-blue-500" },
   meeting: { icon: Users, color: "bg-purple-500" },
-  study: { icon: BookOpen, color: "bg-indigo-500" },
+  study: { icon: BookOpen, color: "bg-indigo-500" }, // Indigo theme for study events
   workout: { icon: Dumbbell, color: "bg-green-500" },
   networking: { icon: Coffee, color: "bg-orange-500" },
   recruiting: { icon: Briefcase, color: "bg-red-500" },
@@ -128,10 +129,10 @@ function WeekView({ timeBlocks, currentDate, typeConfig }: { timeBlocks: TimeBlo
     <div className="grid grid-cols-7 gap-2">
       {eventsByDay.map(({ date, events }) => (
         <div key={date.toISOString()} className="border rounded-lg p-2 min-h-[200px]">
-          <div className={`text-xs font-semibold mb-2 ${isToday(date) ? 'text-blue-500' : 'text-muted-foreground'}`}>
+          <div className={`text-xs font-semibold mb-2 ${isTodayGlobal(date) ? 'text-blue-500' : 'text-muted-foreground'}`}>
             {format(date, 'EEE')}
           </div>
-          <div className={`text-sm font-bold mb-2 ${isToday(date) ? 'text-blue-500' : ''}`}>
+          <div className={`text-sm font-bold mb-2 ${isTodayGlobal(date) ? 'text-blue-500' : ''}`}>
             {format(date, 'd')}
           </div>
           <div className="space-y-1">
@@ -201,7 +202,7 @@ function MonthView({ timeBlocks, currentDate, typeConfig }: { timeBlocks: TimeBl
             const dateKey = format(date, 'yyyy-MM-dd');
             const dayEvents = eventsByDay.get(dateKey) || [];
             const isCurrentMonth = isSameMonth(date, currentDate);
-            const isCurrentDay = isToday(date);
+            const isCurrentDay = isTodayGlobal(date);
             
             return (
               <div
@@ -310,9 +311,9 @@ export function TimelineView() {
   const [timeBlocks, setTimeBlocks] = useState<TimeBlock[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<"day" | "week" | "month">("week"); // Default to week view
-  // Set to current week (week starting from this Monday, or today if it's Monday)
+  // Set to current week (week starting from this Monday, using global "today")
   const [currentDate, setCurrentDate] = useState(() => {
-    const today = new Date();
+    const today = getToday(); // Use global "today" (Jan 21, 2026)
     return startOfWeek(today, { weekStartsOn: 1 }); // Start of current week (Monday)
   });
   
@@ -558,7 +559,7 @@ export function TimelineView() {
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => setCurrentDate(new Date())}
+            onClick={() => setCurrentDate(getToday())}
             className="h-7 px-2 text-xs"
           >
             Today

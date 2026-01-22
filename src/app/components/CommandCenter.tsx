@@ -2,6 +2,8 @@ import { Brain, Zap, Target, Clock } from "lucide-react";
 import { Card } from "@/app/components/ui/card";
 import { Badge } from "@/app/components/ui/badge";
 import { motion } from "motion/react";
+import { format } from "date-fns";
+import { getToday } from "@/utils/dateUtils";
 
 export function CommandCenter() {
   return (

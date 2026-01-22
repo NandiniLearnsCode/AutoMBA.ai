@@ -1,10 +1,19 @@
-import { Calendar, Clock, AlertTriangle } from "lucide-react";
+import { Calendar, Clock, AlertTriangle, Plus } from "lucide-react";
 import { Card } from "@/app/components/ui/card";
 import { Badge } from "@/app/components/ui/badge";
 import { Progress } from "@/app/components/ui/progress";
 import { Button } from "@/app/components/ui/button";
-import { ScheduleAssignmentDialog } from "./ScheduleAssignmentDialog";
 import { useState } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/app/components/ui/dialog";
+import { Input } from "@/app/components/ui/input";
+import { Label } from "@/app/components/ui/label";
 
 interface Assignment {
   id: string;
@@ -15,6 +24,10 @@ interface Assignment {
   progress: number;
   estimatedTime: string;
   status: "not-started" | "in-progress" | "completed";
+}
+
+interface AssignmentGridProps {
+  onScheduleTime?: (assignment: Assignment, time: string, duration: number) => void;
 }
 
 const assignments: Assignment[] = [
@@ -70,8 +83,12 @@ const assignments: Assignment[] = [
   },
 ];
 
-export function AssignmentGrid() {
-  const [selectedAssignment, setSelectedAssignment] = useState<Assignment | null>(null);
+export function AssignmentGrid({ onScheduleTime }: AssignmentGridProps) {
+  const [selectedAssignment, setSelectedAssignment] = useState<Assignment | null>(
+    null
+  );
+  const [scheduleTime, setScheduleTime] = useState("14:00");
+  const [scheduleDuration, setScheduleDuration] = useState("60");
   const [dialogOpen, setDialogOpen] = useState(false);
 
   const priorityColors = {
@@ -80,9 +97,12 @@ export function AssignmentGrid() {
     low: "border-gray-500/50 bg-gray-500/5",
   };
 
-  const handleScheduleClick = (assignment: Assignment) => {
-    setSelectedAssignment(assignment);
-    setDialogOpen(true);
+  const handleSchedule = () => {
+    if (selectedAssignment && onScheduleTime) {
+      onScheduleTime(selectedAssignment, scheduleTime, parseInt(scheduleDuration));
+      setDialogOpen(false);
+      setSelectedAssignment(null);
+    }
   };
 
   return (
@@ -124,12 +144,25 @@ export function AssignmentGrid() {
             </div>
 
             {assignment.status !== "completed" && (
-              <div className="space-y-1">
+              <div className="space-y-2">
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-muted-foreground">Progress</span>
                   <span className="font-semibold">{assignment.progress}%</span>
                 </div>
                 <Progress value={assignment.progress} className="h-1.5" />
+                
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full mt-2"
+                  onClick={() => {
+                    setSelectedAssignment(assignment);
+                    setDialogOpen(true);
+                  }}
+                >
+                  <Calendar className="w-3 h-3 mr-1" />
+                  Schedule Time
+                </Button>
               </div>
             )}
 
@@ -140,17 +173,73 @@ export function AssignmentGrid() {
         ))}
       </div>
 
-      {/* Schedule Dialog */}
-      {selectedAssignment && (
-        <ScheduleAssignmentDialog
-          assignment={selectedAssignment}
-          open={dialogOpen}
-          onOpenChange={setDialogOpen}
-          onSuccess={() => {
-            // Could refresh assignments or show success message
-          }}
-        />
-      )}
+      <div className="mt-4">
+        <Button variant="outline" className="w-full">
+          <Plus className="w-4 h-4 mr-2" />
+          Add New Assignment
+        </Button>
+      </div>
+
+      {/* Schedule Time Dialog */}
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Schedule Study Time</DialogTitle>
+            <DialogDescription>
+              Block time on your calendar to work on "{selectedAssignment?.title}"
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="time">Start Time</Label>
+              <Input
+                id="time"
+                type="time"
+                value={scheduleTime}
+                onChange={(e) => setScheduleTime(e.target.value)}
+              />
+            </div>
+            
+            <div className="space-y-2">
+              <Label htmlFor="duration">Duration (minutes)</Label>
+              <Input
+                id="duration"
+                type="number"
+                min="15"
+                step="15"
+                value={scheduleDuration}
+                onChange={(e) => setScheduleDuration(e.target.value)}
+                placeholder="60"
+              />
+            </div>
+
+            <div className="rounded-lg bg-blue-500/10 border border-blue-500/20 p-3">
+              <p className="text-xs text-muted-foreground">
+                <strong>Assignment:</strong> {selectedAssignment?.title}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                <strong>Course:</strong> {selectedAssignment?.course}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                <strong>Due:</strong> {selectedAssignment?.dueDate}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex gap-2 justify-end">
+            <Button variant="outline" onClick={() => setDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button 
+              onClick={handleSchedule}
+              className="bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600"
+            >
+              Add to Calendar
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
