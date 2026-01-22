@@ -17,6 +17,7 @@ export default defineConfig({
     },
   },
   server: {
+    port: 5173,
     proxy: {
       '/api/mcp-calendar': {
         target: 'http://localhost:3000',

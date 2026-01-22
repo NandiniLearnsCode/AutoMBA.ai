@@ -18,7 +18,8 @@ import { toast } from "sonner";
 import { generateAIRecommendations, AIRecommendation } from "@/utils/aiRecommendationService";
 import { useMcpServer } from "@/hooks/useMcpServer";
 import { getToday } from "@/utils/dateUtils";
-import { startOfDay, endOfDay } from "date-fns";
+import { startOfDay, endOfDay, format } from "date-fns";
+import { PriorityRanking, defaultPriorities, PriorityItem } from "@/app/components/PriorityRanking";
 
 function AppContent() {
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -37,6 +38,7 @@ function AppContent() {
     }>
   >([]);
   const [loadingRecommendations, setLoadingRecommendations] = useState(true);
+  const [priorities, setPriorities] = useState<PriorityItem[]>(defaultPriorities);
   
   // MCP server for calendar operations
   const { connected, callTool, connect } = useMcpServer('google-calendar');
@@ -119,10 +121,33 @@ function AppContent() {
           })
           .filter((e: any) => e !== null);
 
-        // Load assignments (mock data for now - can be enhanced)
+        // Load assignments with system date awareness
+        const tomorrow = new Date(today);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const dayAfterTomorrow = new Date(today);
+        dayAfterTomorrow.setDate(dayAfterTomorrow.getDate() + 2);
+        
+        const formatDateForDisplay = (date: Date) => {
+          return format(date, "MMM d, h:mm a");
+        };
+        
         const assignments = [
-          { id: "1", title: "Valuation Case Study", course: "Corporate Finance", dueDate: "Tomorrow, 11:59 PM", priority: "high", progress: 35 },
-          { id: "5", title: "Operations Group Project", course: "Operations Management", dueDate: "Jan 23, 9:00 AM", priority: "high", progress: 20 },
+          { 
+            id: "1", 
+            title: "Valuation Case Study", 
+            course: "Corporate Finance", 
+            dueDate: `Tomorrow, ${formatDateForDisplay(tomorrow)}`, 
+            priority: "high", 
+            progress: 35 
+          },
+          { 
+            id: "5", 
+            title: "Operations Group Project", 
+            course: "Operations Management", 
+            dueDate: formatDateForDisplay(dayAfterTomorrow), 
+            priority: "high", 
+            progress: 20 
+          },
         ];
 
         // Generate AI recommendations
@@ -149,6 +174,13 @@ function AppContent() {
 
     if (connected) {
       generateRecommendations();
+      
+      // Refresh recommendations every 5 minutes to stay contextually aware
+      const refreshInterval = setInterval(() => {
+        generateRecommendations();
+      }, 5 * 60 * 1000); // 5 minutes
+      
+      return () => clearInterval(refreshInterval);
     }
   }, [connected, callTool, connect]);
 
@@ -317,6 +349,21 @@ function AppContent() {
       <main className="max-w-4xl mx-auto px-6 py-6 space-y-6">
         {/* Hero Section: Day at a Glance */}
         <CommandCenter />
+
+        {/* Priority Ranking */}
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <h3 className="font-semibold text-xs text-muted-foreground">Your Priorities</h3>
+            <Badge variant="outline" className="text-xs">Drag to reorder</Badge>
+          </div>
+          <PriorityRanking
+            priorities={priorities}
+            onPrioritiesChange={(newPriorities) => {
+              setPriorities(newPriorities);
+              // TODO: Update recommendations based on new priorities
+            }}
+          />
+        </div>
 
         {/* Chat Input Card */}
         <ChatInputCard onSendMessage={handleChatMessage} />

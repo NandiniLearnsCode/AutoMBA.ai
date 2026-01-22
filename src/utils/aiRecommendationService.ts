@@ -66,9 +66,21 @@ export async function generateAIRecommendations(
           .join("\n")
       : "No assignments data available";
 
+    const now = new Date();
+    const currentTime = now.toLocaleTimeString('en-US', { 
+      hour: '2-digit', 
+      minute: '2-digit', 
+      hour12: true 
+    });
+    const dayOfWeek = format(today, "EEEE");
+    const isWeekend = today.getDay() === 0 || today.getDay() === 6;
+    
     const systemPrompt = `You are Kaisey, an AI assistant helping MBA students optimize their schedules.
 
-Analyze the user's calendar for ${todayStr} and generate 2-4 actionable recommendations to improve their schedule.
+**Current Context:**
+- Today is ${todayStr} (${dayOfWeek})
+- Current time: ${currentTime}
+- ${isWeekend ? 'Weekend - focus on rest, wellness, and catch-up work' : 'Weekday - prioritize classes, networking, and assignments'}
 
 **Today's Schedule:**
 ${eventsContext || "No events scheduled"}
@@ -76,24 +88,36 @@ ${eventsContext || "No events scheduled"}
 **Assignments:**
 ${assignmentsContext}
 
-**Recommendation Guidelines:**
-1. Identify tight schedules (events back-to-back with no buffer)
-2. Find opportunities to add study time for urgent assignments
-3. Suggest moving non-critical events to create better flow
-4. Recommend deleting or rescheduling low-priority conflicts
-5. Prioritize based on: academic deadlines, networking opportunities, wellness needs
+**Your Task:**
+Analyze the schedule and generate 2-5 actionable recommendations. Be contextually aware:
+- If it's morning, suggest optimizations for the day ahead
+- If it's afternoon, focus on remaining time and evening prep
+- If it's evening, suggest tomorrow's prep or rest opportunities
+- Consider time of day for optimal scheduling (e.g., study blocks, workouts)
+
+**Recommendation Types (prioritize these):**
+1. **BUFFER** - Events back-to-back with <15min gap (suggest adding buffer time or shifting)
+2. **URGENCY** - Assignments due within 48h with <50% completion (suggest study blocks)
+3. **SHIFT** - Non-critical events that could move to create better flow (suggest new time)
+4. **OPTIMIZATION** - Opportunities to add wellness, study, or networking time
+5. **ALERT** - Critical conflicts or missed opportunities
+
+**For each recommendation, provide:**
+- Specific event names and times
+- Clear reasoning based on current context
+- Actionable steps (add buffer, move event, schedule study time, etc.)
 
 **Response Format (JSON array):**
 [
   {
     "type": "buffer" | "urgency" | "shift" | "optimization" | "alert",
     "title": "Short, actionable title (max 50 chars)",
-    "description": "Clear explanation with specific times and event names (2-3 sentences)",
+    "description": "Clear explanation with specific times, event names, and why this helps (2-3 sentences). Reference current time context.",
     "action": {
       "type": "add" | "move" | "delete" | "reschedule",
       "eventId": "event-id-if-moving/deleting",
       "eventTitle": "Event name if moving/deleting",
-      "newTime": "HH:MM format if rescheduling",
+      "newTime": "HH:MM format if rescheduling (24-hour format)",
       "duration": minutes if adding,
       "title": "Event title if adding"
     },
@@ -101,7 +125,7 @@ ${assignmentsContext}
   }
 ]
 
-Be specific with times, event names, and actions. Return ONLY valid JSON array, no other text.`;
+Be specific with times, event names, and actions. Reference the current time and day context. Return ONLY valid JSON array, no other text.`;
 
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -115,7 +139,7 @@ Be specific with times, event names, and actions. Return ONLY valid JSON array, 
           { role: "system", content: systemPrompt },
           {
             role: "user",
-            content: `Generate recommendations for ${todayStr}. Focus on actionable improvements.`,
+            content: `Generate contextually-aware recommendations for ${todayStr} at ${currentTime}. Analyze the schedule and provide specific, actionable suggestions for optimizing, adding, or adjusting events. Consider the time of day and what makes sense for right now.`,
           },
         ],
         temperature: 0.7,

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { MessageSquare, Send, X, Brain, Check, Clock, Calendar, Sparkles } from "lucide-react";
+import { MessageSquare, Send, X, Brain, Check, Clock, Calendar, Sparkles, ExternalLink } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { ChatAction } from "./ChatAction";
 import { Button } from "@/app/components/ui/button";
@@ -275,6 +275,21 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
     }
   }, [connected, callTool, connect]);
 
+  // Generate simple welcome message with priority ranking
+  const generatePersonalizedGreeting = useCallback(() => {
+    setMessages((prevMessages) => {
+      if (prevMessages.length === 0 || (prevMessages.length === 1 && prevMessages[0].type === "agent")) {
+        return [{
+          id: "1",
+          type: "agent",
+          content: "Hi! I am Kaisey, tell me your priority and I'll optimize your schedule",
+          timestamp: new Date(),
+        }];
+      }
+      return prevMessages;
+    });
+  }, []);
+
   // Load current week's events when component mounts and MCP is connected
   useEffect(() => {
     if (connected && !mcpLoading) {
@@ -285,79 +300,11 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
           lastEvents: events,
         }));
         
-        // Generate personalized greeting with insights
-        if (messages.length === 0 && events.length > 0) {
-          generatePersonalizedGreeting(events);
-        }
+        // Greeting is generated separately on mount
       });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected, mcpLoading, loadCalendarEvents]);
-
-  // Generate personalized greeting with quick insights
-  const generatePersonalizedGreeting = useCallback((events: ParsedEvent[]) => {
-    const today = getToday();
-    const todayEvents = events.filter(e => {
-      const eventDate = e.startDate || new Date();
-      return eventDate.toDateString() === today.toDateString();
-    });
-
-    if (todayEvents.length === 0) {
-      setMessages([{
-        id: "1",
-        type: "agent",
-        content: "Hey! You've got a free day today. Perfect opportunity to catch up on assignments or schedule some networking. What would you like to plan?",
-        timestamp: new Date(),
-      }]);
-      return;
-    }
-
-    // Analyze today's schedule
-    const sortedEvents = [...todayEvents].sort((a, b) => a.time.localeCompare(b.time));
-    const firstEvent = sortedEvents[0];
-    const lastEvent = sortedEvents[sortedEvents.length - 1];
-    
-    // Check for tight schedules
-    let tightScheduleCount = 0;
-    for (let i = 0; i < sortedEvents.length - 1; i++) {
-      const current = sortedEvents[i];
-      const next = sortedEvents[i + 1];
-      const currentEnd = new Date(current.startDate || new Date());
-      currentEnd.setMinutes(currentEnd.getMinutes() + current.duration);
-      const nextStart = new Date(next.startDate || new Date());
-      const bufferMinutes = (nextStart.getTime() - currentEnd.getTime()) / (1000 * 60);
-      if (bufferMinutes < 15 && bufferMinutes >= 0) {
-        tightScheduleCount++;
-      }
-    }
-
-    const classCount = sortedEvents.filter(e => e.type === "class").length;
-    const networkingCount = sortedEvents.filter(e => e.type === "networking" || e.type === "recruiting").length;
-
-    let greeting = "Hey! ";
-    
-    if (classCount >= 2) {
-      greeting += `You've got a busy morning with ${classCount} back-to-back classes. `;
-    } else if (firstEvent) {
-      greeting += `Your day starts at ${firstEvent.time} with "${firstEvent.title}". `;
-    }
-
-    if (tightScheduleCount > 0) {
-      greeting += `I noticed ${tightScheduleCount} tight transition${tightScheduleCount > 1 ? 's' : ''} - want me to add buffer time? `;
-    }
-
-    if (networkingCount > 0) {
-      greeting += `You've got ${networkingCount} networking event${networkingCount > 1 ? 's' : ''} scheduled - great for building connections. `;
-    }
-
-    greeting += "Ready to optimize your schedule?";
-
-    setMessages([{
-      id: "1",
-      type: "agent",
-      content: greeting,
-      timestamp: new Date(),
-    }]);
-  }, []);
 
   // Connect to MCP on mount
   useEffect(() => {
@@ -981,6 +928,11 @@ ${calendarContextText}
               lastAction: "add",
             }));
             
+            // Refresh greeting with updated events
+            if (updatedEvents.length > 0) {
+              generatePersonalizedGreeting(updatedEvents);
+            }
+            
             // Notify parent component
             if (onScheduleChange) {
               onScheduleChange(message.action.type, `Created event: ${eventDetails.title} at ${eventDetails.start.toLocaleTimeString()}`);
@@ -1019,6 +971,11 @@ ${calendarContextText}
               lastEvents: updatedEvents,
               lastAction: "move",
             }));
+            
+            // Refresh greeting with updated events
+            if (updatedEvents.length > 0) {
+              generatePersonalizedGreeting(updatedEvents);
+            }
             
             setTimeout(() => {
               setMessages((prev) => [
