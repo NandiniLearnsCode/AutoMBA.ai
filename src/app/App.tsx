@@ -19,7 +19,6 @@ import { generateAIRecommendations, AIRecommendation } from "@/utils/aiRecommend
 import { useMcpServer } from "@/hooks/useMcpServer";
 import { getToday } from "@/utils/dateUtils";
 import { startOfDay, endOfDay, format } from "date-fns";
-import { PriorityRanking, defaultPriorities, PriorityItem } from "@/app/components/PriorityRanking";
 
 function AppContent() {
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -38,7 +37,6 @@ function AppContent() {
     }>
   >([]);
   const [loadingRecommendations, setLoadingRecommendations] = useState(true);
-  const [priorities, setPriorities] = useState<PriorityItem[]>(defaultPriorities);
   
   // MCP server for calendar operations
   const { connected, callTool, connect } = useMcpServer('google-calendar');
@@ -349,21 +347,6 @@ function AppContent() {
       <main className="max-w-4xl mx-auto px-6 py-6 space-y-6">
         {/* Hero Section: Day at a Glance */}
         <CommandCenter />
-
-        {/* Priority Ranking */}
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <h3 className="font-semibold text-xs text-muted-foreground">Your Priorities</h3>
-            <Badge variant="outline" className="text-xs">Drag to reorder</Badge>
-          </div>
-          <PriorityRanking
-            priorities={priorities}
-            onPrioritiesChange={(newPriorities) => {
-              setPriorities(newPriorities);
-              // TODO: Update recommendations based on new priorities
-            }}
-          />
-        </div>
 
         {/* Chat Input Card */}
         <ChatInputCard onSendMessage={handleChatMessage} />
