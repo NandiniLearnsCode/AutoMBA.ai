@@ -259,6 +259,12 @@ export function AssignmentGrid() {
       </div>
 
       <div className="space-y-3">
+        {assignments.length === 0 && !loadingAssignments && (
+          <div className="text-center py-8 text-sm text-muted-foreground">
+            <p>No assignments found.</p>
+            <p className="text-xs mt-1">Make sure Canvas is connected and you have active assignments.</p>
+          </div>
+        )}
         {assignments.map((assignment) => (
           <div
             key={assignment.id}

@@ -426,6 +426,20 @@ app.get('/auth/url', (req, res) => {
   res.json({ url });
 });
 
+// Handle GET requests to /mcp (for testing/debugging)
+app.get('/mcp', (req, res) => {
+  res.status(405).json({
+    error: 'Method Not Allowed',
+    message: 'MCP endpoint only accepts POST requests. Use the MCP client to connect.',
+    info: {
+      endpoint: '/mcp',
+      method: 'POST',
+      contentType: 'application/json',
+      healthCheck: '/health'
+    }
+  });
+});
+
 // Health check
 app.get('/health', (req, res) => {
   const isAuthenticated = oauth2Client?.credentials && 
