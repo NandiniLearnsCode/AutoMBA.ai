@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(test:*)",
+      "Bash(node server/mcp-calendar-server.js:*)",
+      "Bash(curl:*)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(ss:*)"
+    ]
+  }
+}

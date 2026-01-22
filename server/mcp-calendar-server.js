@@ -5,14 +5,24 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { google } from 'googleapis';
 
-const app = express();
-const PORT = 3000;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-// Enable CORS for Vite dev server
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Enable CORS for frontend
+const allowedOrigins = [
+  'http://localhost:5173',
+  process.env.FRONTEND_URL,
+].filter(Boolean);
+
 app.use(cors({
-  origin: 'http://localhost:5173',
+  origin: allowedOrigins,
   credentials: true
 }));
 
@@ -73,7 +83,7 @@ app.post('/mcp', async (req, res) => {
           id,
           error: {
             code: -32001,
-            message: 'OAuth2 not authenticated. Please visit http://localhost:3000/auth/url to authenticate first.'
+            message: 'OAuth2 not authenticated. Please visit /auth/url to authenticate first.'
           }
         });
       }
@@ -389,18 +399,27 @@ app.get('/auth/url', (req, res) => {
 
 // Health check
 app.get('/health', (req, res) => {
-  const isAuthenticated = oauth2Client?.credentials && 
+  const isAuthenticated = oauth2Client?.credentials &&
     (oauth2Client.credentials.access_token || oauth2Client.credentials.refresh_token);
-  
-  res.json({ 
-    status: 'ok', 
+
+  res.json({
+    status: 'ok',
     oauth2Initialized: !!oauth2Client,
     authenticated: isAuthenticated,
-    authUrl: isAuthenticated ? null : 'http://localhost:3000/auth/url'
+    authUrl: isAuthenticated ? null : '/auth/url'
   });
 });
 
+// Serve static frontend files in production
+const distPath = path.join(__dirname, '..', 'dist');
+app.use(express.static(distPath));
+
+// SPA fallback - serve index.html for all non-API routes
+app.get('*', (req, res) => {
+  res.sendFile(path.join(distPath, 'index.html'));
+});
+
 app.listen(PORT, () => {
-  console.log(`Google Calendar MCP Server running on http://localhost:${PORT}`);
-  console.log('MCP endpoint: http://localhost:3000/mcp');
+  console.log(`Server running on port ${PORT}`);
+  console.log(`MCP endpoint: /mcp`);
 });
