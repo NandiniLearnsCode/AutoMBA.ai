@@ -257,24 +257,11 @@ export function AssignmentGrid() {
       // Parse response (optimized)
       const canvasItems = parseCanvasResponse(response);
       console.log(`✅ Found ${canvasItems.length} Canvas items in ${Date.now() - startTime}ms`);
-      
-      // Debug: Log sample items
-      if (canvasItems.length > 0) {
-        console.log('📋 Sample items:', canvasItems.slice(0, 3).map(i => ({
-          type: i.type,
-          name: i.name || i.title,
-          due_at: i.due_at,
-          posted_at: i.posted_at,
-          created_at: i.created_at
-        })));
-      }
 
       // Filter to show current month and future months only (exclude past months)
       const today = getToday();
       const monthStart = startOfMonth(today);
       monthStart.setHours(0, 0, 0, 0);
-      
-      console.log(`📅 Filtering items: monthStart = ${format(monthStart, 'yyyy-MM-dd')}, today = ${format(today, 'yyyy-MM-dd')}`);
       
       // Filter Canvas items by date - show current month and future only
       const currentAndFutureItems = canvasItems.filter((canvasItem) => {
@@ -304,44 +291,22 @@ export function AssignmentGrid() {
         
         if (!itemDate) {
           // Include items without dates (they might be upcoming)
-          console.log(`✅ Including item without date: ${canvasItem.name || canvasItem.title} (${canvasItem.type})`);
           return true;
         }
         
         // Include if date is in current month or future
-        const isIncluded = itemDate >= monthStart;
-        if (!isIncluded) {
-          console.log(`❌ Excluding item: ${canvasItem.name || canvasItem.title} (${canvasItem.type}) - date: ${format(itemDate, 'yyyy-MM-dd')} < ${format(monthStart, 'yyyy-MM-dd')}`);
-        }
-        return isIncluded;
+        return itemDate >= monthStart;
       });
       
       const assignmentsCount = currentAndFutureItems.filter(i => i.type === 'assignment').length;
       const announcementsCount = currentAndFutureItems.filter(i => i.type === 'announcement').length;
       const quizzesCount = currentAndFutureItems.filter(i => i.type === 'quiz').length;
       console.log(`📅 Filtered to ${assignmentsCount} assignments, ${announcementsCount} announcements, ${quizzesCount} quizzes (current & future months)`);
-      
-      // If no items after filtering, show all items (fallback to show something)
-      let itemsToConvert = currentAndFutureItems;
-      if (currentAndFutureItems.length === 0 && canvasItems.length > 0) {
-        console.warn('⚠️ No items passed date filter. Showing all items as fallback:');
-        console.log('All items:', canvasItems.map(i => ({
-          type: i.type,
-          name: i.name || i.title,
-          due_at: i.due_at,
-          posted_at: i.posted_at,
-          created_at: i.created_at,
-          date: i.due_at || i.posted_at || i.created_at
-        })));
-        itemsToConvert = canvasItems; // Show all items if filtering results in zero
-      }
 
       // Convert to our format and filter out nulls
-      const converted = itemsToConvert
+      const converted = currentAndFutureItems
         .map(convertCanvasItem)
         .filter((a): a is CourseItem => a !== null);
-
-      console.log(`✅ Converted ${converted.length} items to display format`);
 
       // Sort by priority and due date
       converted.sort((a, b) => {
@@ -354,16 +319,8 @@ export function AssignmentGrid() {
       assignmentsCountRef.current = converted.length;
       lastFetchTimeRef.current = Date.now();
       
-      if (converted.length === 0) {
-        if (canvasItems.length === 0) {
-          console.warn(`⚠️ No Canvas items found at all. Check if you have assignments, announcements, or quizzes in Canvas.`);
-        } else if (currentAndFutureItems.length === 0 && itemsToConvert === currentAndFutureItems) {
-          console.warn(`⚠️ ${canvasItems.length} items found, but none are in current/future months. Showing all items as fallback.`);
-        } else {
-          console.warn(`⚠️ ${itemsToConvert.length} items to convert, but ${converted.length} were converted successfully. Check conversion logic.`);
-        }
-      } else {
-        console.log(`✅ Successfully displaying ${converted.length} course items`);
+      if (converted.length === 0 && currentAndFutureItems.length === 0) {
+        console.warn(`⚠️ No Canvas items found for current and future months.`);
       }
     } catch (error: any) {
       console.error('❌ Error fetching Canvas items:', error);
