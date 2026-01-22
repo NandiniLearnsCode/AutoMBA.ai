@@ -1,23 +1,24 @@
 // Global date utility
-// Sets "today" to January 21, 2026 (Wednesday) for the application
-
-export const GLOBAL_TODAY = new Date(2026, 0, 21); // Jan 21, 2026 (month is 0-indexed)
+// Uses the actual system date for contextual awareness
 
 /**
- * Get the global "today" date
- * Returns January 21, 2026 (Wednesday)
+ * Get today's date (system date)
+ * Returns the current date from the system
  */
 export function getToday(): Date {
-  return new Date(GLOBAL_TODAY);
+  const now = new Date();
+  // Return date at midnight to ensure consistent comparisons
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
 }
 
 /**
- * Check if a date is "today" (Jan 21, 2026)
+ * Check if a date is "today" (system date)
  */
 export function isToday(date: Date): boolean {
+  const today = getToday();
   return (
-    date.getFullYear() === GLOBAL_TODAY.getFullYear() &&
-    date.getMonth() === GLOBAL_TODAY.getMonth() &&
-    date.getDate() === GLOBAL_TODAY.getDate()
+    date.getFullYear() === today.getFullYear() &&
+    date.getMonth() === today.getMonth() &&
+    date.getDate() === today.getDate()
   );
 }
