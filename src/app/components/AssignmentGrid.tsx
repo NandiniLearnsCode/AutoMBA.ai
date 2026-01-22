@@ -392,10 +392,29 @@ export function AssignmentGrid() {
         return itemDate >= now && itemDate <= endOfYear;
       });
       
-      // Match Canvas items with Google Calendar events
-      // Match by: same date (within same day) and similar title
+      // Extract unique dates from Google Calendar events
+      const calendarDates = new Set<string>();
+      if (calendarEvents.length > 0) {
+        calendarEvents.forEach((calEvent: any) => {
+          const calDateStr = calEvent.start?.dateTime || calEvent.start?.date;
+          if (calDateStr) {
+            try {
+              const calDate = parseISO(calDateStr);
+              // Store as YYYY-MM-DD for easy comparison
+              const dateKey = `${calDate.getFullYear()}-${String(calDate.getMonth() + 1).padStart(2, '0')}-${String(calDate.getDate()).padStart(2, '0')}`;
+              calendarDates.add(dateKey);
+            } catch {
+              // Skip invalid dates
+            }
+          }
+        });
+        console.log(`📅 Found ${calendarDates.size} unique dates in Google Calendar events`);
+      }
+      
+      // Match Canvas items with Google Calendar events by date only
+      // Show Canvas items that have dates matching any calendar event date
       const syncedItems = dateFilteredItems.filter((canvasItem) => {
-        if (calendarEvents.length === 0) {
+        if (calendarEvents.length === 0 || calendarDates.size === 0) {
           // If no calendar events, show all Canvas items
           return true;
         }
@@ -421,6 +440,7 @@ export function AssignmentGrid() {
             } catch {}
           }
         } else {
+          // Assignment or quiz - use due_at
           if (canvasItem.due_at) {
             try {
               itemDate = parseISO(canvasItem.due_at);
@@ -432,47 +452,16 @@ export function AssignmentGrid() {
           return false;
         }
         
-        const canvasTitle = (canvasItem.name || canvasItem.title || '').toLowerCase();
-        
-        // Check if there's a matching calendar event
-        const hasMatch = calendarEvents.some((calEvent: any) => {
-          // Get calendar event date
-          const calDateStr = calEvent.start?.dateTime || calEvent.start?.date;
-          if (!calDateStr) return false;
-          
-          try {
-            const calDate = parseISO(calDateStr);
-            // Check if same day
-            const sameDay = calDate.getFullYear() === itemDate!.getFullYear() &&
-                           calDate.getMonth() === itemDate!.getMonth() &&
-                           calDate.getDate() === itemDate!.getDate();
-            
-            if (!sameDay) return false;
-            
-            // Check title similarity
-            const calTitle = (calEvent.summary || '').toLowerCase();
-            
-            // Check if titles are similar (contains or is contained)
-            const titleMatch = canvasTitle.includes(calTitle) || 
-                              calTitle.includes(canvasTitle) ||
-                              // Check for common words
-                              canvasTitle.split(' ').some(word => word.length > 3 && calTitle.includes(word)) ||
-                              calTitle.split(' ').some(word => word.length > 3 && canvasTitle.includes(word));
-            
-            return titleMatch;
-          } catch {
-            return false;
-          }
-        });
-        
-        return hasMatch;
+        // Check if Canvas item date matches any calendar event date
+        const itemDateKey = `${itemDate.getFullYear()}-${String(itemDate.getMonth() + 1).padStart(2, '0')}-${String(itemDate.getDate()).padStart(2, '0')}`;
+        return calendarDates.has(itemDateKey);
       });
       
       const assignmentsCount = syncedItems.filter(i => i.type === 'assignment').length;
       const quizzesCount = syncedItems.filter(i => i.type === 'quiz').length;
       const announcementsCount = syncedItems.filter(i => i.type === 'announcement').length;
       const calendarCount = syncedItems.filter(i => i.type === 'calendar_event').length;
-      console.log(`📅 Synced ${assignmentsCount} assignments, ${quizzesCount} quizzes, ${announcementsCount} announcements, ${calendarCount} calendar events with Google Calendar`);
+      console.log(`📅 Found ${assignmentsCount} assignments, ${quizzesCount} quizzes, ${announcementsCount} announcements, ${calendarCount} calendar events on dates matching Google Calendar`);
       
       // Convert to our format and filter out nulls
       const converted = syncedItems
@@ -674,8 +663,8 @@ export function AssignmentGrid() {
         )}
         {filteredItems.length === 0 && !loadingItems && hasTriedFetch && !connectionError && (
           <div className="text-center py-8 text-sm text-muted-foreground">
-            <p>No {activeTab === "all" ? "items" : activeTab} synced with Google Calendar.</p>
-            <p className="text-xs mt-1">Canvas items are shown only if they match events in your Google Calendar (same date and similar title).</p>
+            <p>No {activeTab === "all" ? "items" : activeTab} found on dates matching your Google Calendar.</p>
+            <p className="text-xs mt-1">Canvas items are shown only if they have dates matching your Google Calendar events (same day).</p>
             <p className="text-xs mt-1">Make sure both Canvas and Google Calendar are connected.</p>
             <p className="text-xs mt-1">Check browser console (F12) for details.</p>
           </div>
