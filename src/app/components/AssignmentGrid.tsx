@@ -204,6 +204,7 @@ function parseCanvasResponse(response: any): any[] {
 
 export function AssignmentGrid() {
   const { connected, callTool, connect, loading, error: connectionError } = useMcpServer('canvas');
+  const { connected: calendarConnected, callTool: callCalendarTool, connect: connectCalendar } = useMcpServer('google-calendar');
   const [items, setItems] = useState<CourseItem[]>([]);
   const [selectedItem, setSelectedItem] = useState<CourseItem | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -253,7 +254,16 @@ export function AssignmentGrid() {
 
     try {
       const startTime = Date.now();
-      console.log('🚀 Fetching Canvas data...');
+      console.log('🚀 Fetching Canvas data and Google Calendar events...');
+      
+      // Connect to Google Calendar if not connected
+      if (!calendarConnected) {
+        try {
+          await connectCalendar();
+        } catch (err) {
+          console.warn('⚠️ Could not connect to Google Calendar:', err);
+        }
+      }
       
       // Try the new tool first, fallback to assignments if it fails
       let canvasItems: any[] = [];
@@ -288,8 +298,53 @@ export function AssignmentGrid() {
         return;
       }
       
-      console.log(`📦 Total items fetched: ${allItems.length}`);
-      console.log('📋 Sample items:', allItems.slice(0, 3));
+      // Fetch Google Calendar events
+      let calendarEvents: any[] = [];
+      if (calendarConnected) {
+        try {
+          const now = new Date();
+          now.setHours(0, 0, 0, 0);
+          const endOfYear = new Date(now.getFullYear(), 11, 31, 23, 59, 59);
+          
+          console.log('📅 Fetching Google Calendar events...');
+          const calendarResponse = await callCalendarTool('list_events', {
+            calendarId: 'primary',
+            timeMin: now.toISOString(),
+            timeMax: endOfYear.toISOString(),
+            maxResults: 500,
+          });
+          
+          // Parse calendar events
+          if (Array.isArray(calendarResponse)) {
+            const textContent = calendarResponse.find((item: any) => item.type === 'text');
+            if (textContent?.text) {
+              try {
+                calendarEvents = JSON.parse(textContent.text);
+              } catch {
+                if (calendarResponse.length > 0 && typeof calendarResponse[0] === 'object' && 'id' in calendarResponse[0]) {
+                  calendarEvents = calendarResponse;
+                }
+              }
+            } else if (calendarResponse.length > 0 && typeof calendarResponse[0] === 'object' && 'id' in calendarResponse[0]) {
+              calendarEvents = calendarResponse;
+            }
+          } else if (calendarResponse?.content && Array.isArray(calendarResponse.content)) {
+            const textContent = calendarResponse.content.find((item: any) => item.type === 'text');
+            if (textContent?.text) {
+              calendarEvents = JSON.parse(textContent.text);
+            }
+          }
+          
+          console.log(`✅ Got ${calendarEvents.length} Google Calendar events`);
+        } catch (calendarError: any) {
+          console.warn('⚠️ Could not fetch Google Calendar events:', calendarError.message);
+        }
+      } else {
+        console.warn('⚠️ Google Calendar not connected. Will show all Canvas items.');
+      }
+      
+      console.log(`📦 Total Canvas items fetched: ${allItems.length}`);
+      console.log('📋 Sample Canvas items:', allItems.slice(0, 3));
 
       // Filter to show only items from now until end of year
       const now = new Date();
@@ -298,7 +353,8 @@ export function AssignmentGrid() {
       
       console.log(`📅 Filtering items: Only showing items from ${format(now, 'MMM d, yyyy')} to ${format(endOfYear, 'MMM d, yyyy')}`);
       
-      const filteredItems = allItems.filter((canvasItem) => {
+      // Filter Canvas items by date
+      const dateFilteredItems = allItems.filter((canvasItem) => {
         // Get the appropriate date field based on type
         let itemDate: Date | null = null;
         
@@ -330,26 +386,100 @@ export function AssignmentGrid() {
         }
         
         if (!itemDate) {
-          // Exclude items without dates
           return false;
         }
         
-        // Include if date is between now and end of year
         return itemDate >= now && itemDate <= endOfYear;
       });
       
-      const assignmentsCount = filteredItems.filter(i => i.type === 'assignment').length;
-      const quizzesCount = filteredItems.filter(i => i.type === 'quiz').length;
-      const announcementsCount = filteredItems.filter(i => i.type === 'announcement').length;
-      const calendarCount = filteredItems.filter(i => i.type === 'calendar_event').length;
-      console.log(`📅 Filtered to ${assignmentsCount} assignments, ${quizzesCount} quizzes, ${announcementsCount} announcements, ${calendarCount} calendar events (from now to end of year)`);
+      // Match Canvas items with Google Calendar events
+      // Match by: same date (within same day) and similar title
+      const syncedItems = dateFilteredItems.filter((canvasItem) => {
+        if (calendarEvents.length === 0) {
+          // If no calendar events, show all Canvas items
+          return true;
+        }
+        
+        // Get Canvas item date
+        let itemDate: Date | null = null;
+        if (canvasItem.type === 'announcement') {
+          if (canvasItem.posted_at) {
+            try {
+              itemDate = parseISO(canvasItem.posted_at);
+            } catch {
+              if (canvasItem.created_at) {
+                try {
+                  itemDate = parseISO(canvasItem.created_at);
+                } catch {}
+              }
+            }
+          }
+        } else if (canvasItem.type === 'calendar_event') {
+          if (canvasItem.start_at) {
+            try {
+              itemDate = parseISO(canvasItem.start_at);
+            } catch {}
+          }
+        } else {
+          if (canvasItem.due_at) {
+            try {
+              itemDate = parseISO(canvasItem.due_at);
+            } catch {}
+          }
+        }
+        
+        if (!itemDate) {
+          return false;
+        }
+        
+        const canvasTitle = (canvasItem.name || canvasItem.title || '').toLowerCase();
+        
+        // Check if there's a matching calendar event
+        const hasMatch = calendarEvents.some((calEvent: any) => {
+          // Get calendar event date
+          const calDateStr = calEvent.start?.dateTime || calEvent.start?.date;
+          if (!calDateStr) return false;
+          
+          try {
+            const calDate = parseISO(calDateStr);
+            // Check if same day
+            const sameDay = calDate.getFullYear() === itemDate!.getFullYear() &&
+                           calDate.getMonth() === itemDate!.getMonth() &&
+                           calDate.getDate() === itemDate!.getDate();
+            
+            if (!sameDay) return false;
+            
+            // Check title similarity
+            const calTitle = (calEvent.summary || '').toLowerCase();
+            
+            // Check if titles are similar (contains or is contained)
+            const titleMatch = canvasTitle.includes(calTitle) || 
+                              calTitle.includes(canvasTitle) ||
+                              // Check for common words
+                              canvasTitle.split(' ').some(word => word.length > 3 && calTitle.includes(word)) ||
+                              calTitle.split(' ').some(word => word.length > 3 && canvasTitle.includes(word));
+            
+            return titleMatch;
+          } catch {
+            return false;
+          }
+        });
+        
+        return hasMatch;
+      });
+      
+      const assignmentsCount = syncedItems.filter(i => i.type === 'assignment').length;
+      const quizzesCount = syncedItems.filter(i => i.type === 'quiz').length;
+      const announcementsCount = syncedItems.filter(i => i.type === 'announcement').length;
+      const calendarCount = syncedItems.filter(i => i.type === 'calendar_event').length;
+      console.log(`📅 Synced ${assignmentsCount} assignments, ${quizzesCount} quizzes, ${announcementsCount} announcements, ${calendarCount} calendar events with Google Calendar`);
       
       // Convert to our format and filter out nulls
-      const converted = filteredItems
+      const converted = syncedItems
         .map(convertCanvasItem)
         .filter((a): a is CourseItem => a !== null);
       
-      console.log(`🔄 Converted ${converted.length} items (${filteredItems.length - converted.length} failed conversion)`);
+      console.log(`🔄 Converted ${converted.length} items (${syncedItems.length - converted.length} failed conversion)`);
 
       // Sort by date (if available) or title
       converted.sort((a, b) => {
@@ -375,10 +505,14 @@ export function AssignmentGrid() {
       itemsCountRef.current = converted.length;
       lastFetchTimeRef.current = Date.now();
       
-      console.log(`✅ Successfully loaded ${converted.length} items in ${Date.now() - startTime}ms`);
+      console.log(`✅ Successfully loaded ${converted.length} synced items in ${Date.now() - startTime}ms`);
       
       if (converted.length === 0 && allItems.length > 0) {
-        console.warn('⚠️ Items found but none are within the current year date range.');
+        if (calendarEvents.length === 0) {
+          console.warn('⚠️ Canvas items found but no Google Calendar events to sync with.');
+        } else {
+          console.warn('⚠️ Canvas items found but none match Google Calendar events.');
+        }
       } else if (converted.length === 0) {
         console.warn('⚠️ No items could be converted. Check item format.');
       }
@@ -394,7 +528,7 @@ export function AssignmentGrid() {
       setLoadingItems(false);
       fetchingRef.current = false;
     }
-  }, [connected, loading, callTool, connect]);
+  }, [connected, loading, callTool, connect, calendarConnected, callCalendarTool, connectCalendar]);
 
   // Fetch items when connected
   useEffect(() => {
@@ -474,7 +608,7 @@ export function AssignmentGrid() {
       <div className="flex items-center justify-between mb-4">
         <div>
           <h3 className="font-semibold">Canvas Course Items</h3>
-          <p className="text-xs text-muted-foreground mt-0.5">All Items</p>
+          <p className="text-xs text-muted-foreground mt-0.5">Synced with Google Calendar</p>
         </div>
         <div className="flex items-center gap-2">
           {loadingItems && (
@@ -540,8 +674,9 @@ export function AssignmentGrid() {
         )}
         {filteredItems.length === 0 && !loadingItems && hasTriedFetch && !connectionError && (
           <div className="text-center py-8 text-sm text-muted-foreground">
-            <p>No {activeTab === "all" ? "items" : activeTab} found for the current year.</p>
-            <p className="text-xs mt-1">Make sure Canvas is connected and you have course items with dates from now through December 31.</p>
+            <p>No {activeTab === "all" ? "items" : activeTab} synced with Google Calendar.</p>
+            <p className="text-xs mt-1">Canvas items are shown only if they match events in your Google Calendar (same date and similar title).</p>
+            <p className="text-xs mt-1">Make sure both Canvas and Google Calendar are connected.</p>
             <p className="text-xs mt-1">Check browser console (F12) for details.</p>
           </div>
         )}
