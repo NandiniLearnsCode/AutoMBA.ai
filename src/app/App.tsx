@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Bot, Bell, Settings as SettingsIcon } from "lucide-react";
 import { Button } from "@/app/components/ui/button";
 import { Badge } from "@/app/components/ui/badge";
@@ -15,12 +15,17 @@ import { Settings } from "@/app/components/Settings";
 import { McpProvider } from "@/contexts/McpContext";
 import { getMcpServerConfigs } from "@/config/mcpServers";
 import { toast } from "sonner";
+import { generateAIRecommendations, AIRecommendation } from "@/utils/aiRecommendationService";
+import { useMcpServer } from "@/hooks/useMcpServer";
+import { getToday } from "@/utils/dateUtils";
+import { startOfDay, endOfDay, format } from "date-fns";
+import { PriorityRanking, defaultPriorities, PriorityItem } from "@/app/components/PriorityRanking";
 
 function AppContent() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const chatbotRef = useRef<{ handleSendMessage: (message: string) => void } | null>(null);
   
-  // Initialize suggestions with buffer-based logic and urgency detection
+  // AI-generated recommendations
   const [suggestions, setSuggestions] = useState<
     Array<{
       id: string;
@@ -29,52 +34,241 @@ function AppContent() {
       description: string;
       assignmentId?: string;
       eventId?: string;
+      action?: AIRecommendation['action'];
     }>
-  >([
-    {
-      id: "1",
-      type: "shift" as const,
-      title: "Tight Schedule: No Buffer Time",
-      description: "Goldman Sachs Info Session ends at 1:00 PM, and your gym session starts immediately after at 1:00 PM. With Low HRV indicating you need recovery, I recommend pushing your gym session to 2:00 PM for a proper buffer.",
-      eventId: "gym-session-1",
-    },
-    {
-      id: "2",
-      type: "urgency" as const,
-      title: "Urgent Assignment Due Tomorrow",
-      description: "Valuation Case Study is due Jan 22, 11:59 PM (35% complete, 4h remaining). I recommend scheduling 2 hours this afternoon at 2:00 PM when you have a gap after your gym session.",
-      assignmentId: "1",
-    },
-    {
-      id: "3",
-      type: "urgency" as const,
-      title: "Operations Project Needs Attention",
-      description: "Operations Group Project is due Jan 23, 9:00 AM (only 20% complete, 6h remaining). You have limited time - I suggest blocking tonight 6:00-9:00 PM and tomorrow morning 6:00-9:00 AM.",
-      assignmentId: "5",
-    },
-  ]);
+  >([]);
+  const [loadingRecommendations, setLoadingRecommendations] = useState(true);
+  const [priorities, setPriorities] = useState<PriorityItem[]>(defaultPriorities);
+  
+  // MCP server for calendar operations
+  const { connected, callTool, connect } = useMcpServer('google-calendar');
+
+  // Generate AI recommendations on mount
+  useEffect(() => {
+    const generateRecommendations = async () => {
+      if (!connected) {
+        await connect();
+        return;
+      }
+
+      try {
+        setLoadingRecommendations(true);
+        const today = getToday();
+        const dayStart = startOfDay(today);
+        const dayEnd = endOfDay(today);
+        
+        dayStart.setHours(0, 0, 0, 0);
+        dayEnd.setHours(23, 59, 59, 999);
+
+        // Load today's events
+        const response = await callTool('list_events', {
+          calendarId: 'primary',
+          timeMin: dayStart.toISOString(),
+          timeMax: dayEnd.toISOString(),
+          maxResults: 50,
+        });
+
+        // Parse events
+        let calendarEvents: any[] = [];
+        if (Array.isArray(response)) {
+          const textContent = response.find((item: any) => item.type === 'text');
+          if (textContent?.text) {
+            try {
+              calendarEvents = JSON.parse(textContent.text);
+            } catch (e) {
+              console.error('Error parsing calendar events:', e);
+            }
+          } else if (response.length > 0 && typeof response[0] === 'object' && 'id' in response[0]) {
+            calendarEvents = response;
+          }
+        }
+
+        // Convert to format expected by AI service
+        const eventsForAI = calendarEvents
+          .map((event: any) => {
+            const startTime = event.start?.dateTime || event.start?.date;
+            if (!startTime) return null;
+            
+            const start = new Date(startTime);
+            const end = new Date(event.end?.dateTime || event.end?.date || startTime);
+            const duration = Math.round((end.getTime() - start.getTime()) / (1000 * 60));
+            
+            const timeStr = start.toLocaleTimeString('en-US', { 
+              hour: '2-digit', 
+              minute: '2-digit', 
+              hour12: false 
+            });
+
+            const summary = event.summary || 'Untitled Event';
+            const lowerSummary = summary.toLowerCase();
+            let type = "meeting";
+            
+            if (lowerSummary.includes('class') || lowerSummary.includes('course')) type = "class";
+            else if (lowerSummary.includes('study') || lowerSummary.includes('homework')) type = "study";
+            else if (lowerSummary.includes('gym') || lowerSummary.includes('workout')) type = "workout";
+            else if (lowerSummary.includes('networking') || lowerSummary.includes('coffee')) type = "networking";
+            else if (lowerSummary.includes('recruiting') || lowerSummary.includes('interview')) type = "recruiting";
+
+            return {
+              id: event.id,
+              title: summary,
+              time: timeStr,
+              duration,
+              type,
+              startDate: start,
+              endDate: end,
+            };
+          })
+          .filter((e: any) => e !== null);
+
+        // Load assignments with system date awareness
+        const tomorrow = new Date(today);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const dayAfterTomorrow = new Date(today);
+        dayAfterTomorrow.setDate(dayAfterTomorrow.getDate() + 2);
+        
+        const formatDateForDisplay = (date: Date) => {
+          return format(date, "MMM d, h:mm a");
+        };
+        
+        const assignments = [
+          { 
+            id: "1", 
+            title: "Valuation Case Study", 
+            course: "Corporate Finance", 
+            dueDate: `Tomorrow, ${formatDateForDisplay(tomorrow)}`, 
+            priority: "high", 
+            progress: 35 
+          },
+          { 
+            id: "5", 
+            title: "Operations Group Project", 
+            course: "Operations Management", 
+            dueDate: formatDateForDisplay(dayAfterTomorrow), 
+            priority: "high", 
+            progress: 20 
+          },
+        ];
+
+        // Generate AI recommendations
+        const aiRecs = await generateAIRecommendations(eventsForAI, assignments);
+        
+        // Convert AI recommendations to suggestion format
+        const formattedSuggestions = aiRecs.map((rec) => ({
+          id: rec.id,
+          type: rec.type as any,
+          title: rec.title,
+          description: rec.description,
+          eventId: rec.action.eventId,
+          assignmentId: rec.action.type === "add" && rec.action.title?.includes("Study") ? "1" : undefined,
+          action: rec.action,
+        }));
+
+        setSuggestions(formattedSuggestions);
+      } catch (error) {
+        console.error("Error generating recommendations:", error);
+      } finally {
+        setLoadingRecommendations(false);
+      }
+    };
+
+    if (connected) {
+      generateRecommendations();
+      
+      // Refresh recommendations every 5 minutes to stay contextually aware
+      const refreshInterval = setInterval(() => {
+        generateRecommendations();
+      }, 5 * 60 * 1000); // 5 minutes
+      
+      return () => clearInterval(refreshInterval);
+    }
+  }, [connected, callTool, connect]);
 
   const handleAcceptSuggestion = async (id: string, suggestionData?: {
     assignmentId?: string;
     eventId?: string;
     type?: string;
+    action?: AIRecommendation['action'];
   }) => {
     const suggestion = suggestions.find((s) => s.id === id);
     if (!suggestion) return;
 
     try {
-      // Handle assignment scheduling (type: 'study')
-      if (suggestion.type === "urgency" && suggestionData?.assignmentId) {
-        toast.success("Study time scheduled", {
-          description: "2-hour study block added to your calendar.",
-        });
+      if (!connected) {
+        await connect();
       }
-      
-      // Handle event shifting (Gym session shift)
-      if (suggestion.type === "shift" && suggestionData?.eventId) {
-        toast.success("Event shifted", {
-          description: "Gym session moved to 2:00 PM to create recovery buffer.",
-        });
+
+      const action = suggestion.action || suggestionData?.action;
+
+      if (action) {
+        const today = getToday();
+
+        // Handle different action types
+        if (action.type === "add" && action.title && action.newTime && action.duration) {
+          // Add new event
+          const [hours, minutes] = action.newTime.split(':').map(Number);
+          const startDate = new Date(today);
+          startDate.setHours(hours, minutes, 0, 0);
+          const endDate = new Date(startDate);
+          endDate.setMinutes(endDate.getMinutes() + action.duration);
+
+          await callTool('create_event', {
+            calendarId: 'primary',
+            summary: action.title,
+            description: `Added via Kaisey recommendation: ${suggestion.title}`,
+            start: { dateTime: startDate.toISOString() },
+            end: { dateTime: endDate.toISOString() },
+          });
+
+          toast.success("Event added", {
+            description: `${action.title} scheduled for ${action.newTime}`,
+          });
+        } else if (action.type === "move" && action.eventId && action.newTime) {
+          // Move existing event - use update_event with estimated duration
+          const [hours, minutes] = action.newTime.split(':').map(Number);
+          const startDate = new Date(today);
+          startDate.setHours(hours, minutes, 0, 0);
+          
+          // Default duration to 60 minutes if not specified
+          const duration = action.duration || 60;
+          const endDate = new Date(startDate);
+          endDate.setMinutes(endDate.getMinutes() + duration);
+
+          await callTool('update_event', {
+            calendarId: 'primary',
+            eventId: action.eventId,
+            start: { dateTime: startDate.toISOString() },
+            end: { dateTime: endDate.toISOString() },
+          });
+
+          toast.success("Event moved", {
+            description: `${action.eventTitle || 'Event'} rescheduled to ${action.newTime}`,
+          });
+        } else if (action.type === "delete" && action.eventId) {
+          // Delete event - try delete_event, fallback to update with cancellation
+          try {
+            await callTool('delete_event', {
+              calendarId: 'primary',
+              eventId: action.eventId,
+            });
+          } catch (deleteError) {
+            // If delete_event doesn't exist, try updating event to cancelled status
+            console.warn("delete_event not available, skipping deletion");
+            toast.info("Event deletion not available", {
+              description: "Please delete the event manually from Google Calendar",
+            });
+            return;
+          }
+
+          toast.success("Event removed", {
+            description: `${action.eventTitle || 'Event'} deleted from your calendar`,
+          });
+        } else if (suggestion.type === "urgency" && suggestionData?.assignmentId) {
+          // Fallback for assignment scheduling
+          toast.success("Study time scheduled", {
+            description: "2-hour study block added to your calendar.",
+          });
+        }
       }
       
       // Remove suggestion
@@ -156,17 +350,42 @@ function AppContent() {
         {/* Hero Section: Day at a Glance */}
         <CommandCenter />
 
+        {/* Priority Ranking */}
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <h3 className="font-semibold text-xs text-muted-foreground">Your Priorities</h3>
+            <Badge variant="outline" className="text-xs">Drag to reorder</Badge>
+          </div>
+          <PriorityRanking
+            priorities={priorities}
+            onPrioritiesChange={(newPriorities) => {
+              setPriorities(newPriorities);
+              // TODO: Update recommendations based on new priorities
+            }}
+          />
+        </div>
+
         {/* Chat Input Card */}
         <ChatInputCard onSendMessage={handleChatMessage} />
 
         {/* Recommendations */}
-        {suggestions.length > 0 && (
+        {(suggestions.length > 0 || loadingRecommendations) && (
           <div>
             <div className="flex items-center gap-2 mb-3">
               <Bot className="w-4 h-4 text-blue-500" />
               <h3 className="font-semibold">My Recommendations</h3>
-              <Badge variant="outline" className="text-xs">{suggestions.length}</Badge>
+              {!loadingRecommendations && (
+                <Badge variant="outline" className="text-xs">{suggestions.length}</Badge>
+              )}
+              {loadingRecommendations && (
+                <Badge variant="outline" className="text-xs">Analyzing...</Badge>
+              )}
             </div>
+            {loadingRecommendations && (
+              <div className="text-sm text-muted-foreground mb-3">
+                Kaisey is analyzing your schedule and generating personalized recommendations...
+              </div>
+            )}
             {suggestions.map((suggestion) => (
               <AgentSuggestion
                 key={suggestion.id}
@@ -174,11 +393,16 @@ function AppContent() {
                 title={suggestion.title}
                 description={suggestion.description}
                 action={{
-                  label: suggestion.type === "urgency" ? "Schedule 2 Hours" : suggestion.type === "shift" ? "Shift to 2:00 PM" : "Accept & Update Calendar",
+                  label: suggestion.action?.type === "add" ? "Add to Calendar" :
+                         suggestion.action?.type === "move" ? `Move to ${suggestion.action.newTime || 'New Time'}` :
+                         suggestion.action?.type === "delete" ? "Remove Event" :
+                         suggestion.type === "urgency" ? "Schedule 2 Hours" :
+                         suggestion.type === "shift" ? "Shift Event" : "Accept & Update Calendar",
                   onClick: () => handleAcceptSuggestion(suggestion.id, {
                     assignmentId: suggestion.assignmentId,
                     eventId: suggestion.eventId,
                     type: suggestion.type,
+                    action: suggestion.action,
                   }),
                 }}
                 dismiss={() => handleDismissSuggestion(suggestion.id)}

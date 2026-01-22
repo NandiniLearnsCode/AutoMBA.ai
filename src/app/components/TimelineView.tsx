@@ -319,10 +319,11 @@ export function TimelineView() {
   const [timeBlocks, setTimeBlocks] = useState<TimeBlock[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<"day" | "week" | "month">("day"); // Default to day view
-  // Set to current week (week starting from this Monday, using global "today")
+  // Set to today's date (system date) - contextually aware
   const [currentDate, setCurrentDate] = useState(() => {
-    const today = getToday(); // Use global "today" (Jan 21, 2026)
-    return startOfWeek(today, { weekStartsOn: 1 }); // Start of current week (Monday)
+    const today = getToday(); // Use actual system date
+    // For day view, show today. For week/month views, show the start of the period containing today
+    return today;
   });
   
   // Use MCP server hook for Google Calendar
@@ -362,17 +363,23 @@ export function TimelineView() {
       let startDate: Date;
       let endDate: Date;
       
+      // Use today as the reference point for all views to ensure contextual awareness
+      const today = getToday();
+      
       if (view === 'day') {
+        // For day view, use the selected date (defaults to today)
         startDate = new Date(currentDate);
         startDate.setHours(0, 0, 0, 0);
         endDate = new Date(currentDate);
         endDate.setHours(23, 59, 59, 999);
       } else if (view === 'week') {
+        // For week view, show the week containing the selected date (defaults to this week)
         startDate = startOfWeek(currentDate, { weekStartsOn: 1 }); // Monday
         startDate.setHours(0, 0, 0, 0);
         endDate = endOfWeek(currentDate, { weekStartsOn: 1 });
         endDate.setHours(23, 59, 59, 999);
       } else { // month
+        // For month view, show the month containing the selected date (defaults to this month)
         startDate = startOfMonth(currentDate);
         startDate.setHours(0, 0, 0, 0);
         endDate = endOfMonth(currentDate);
@@ -567,7 +574,18 @@ export function TimelineView() {
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => setCurrentDate(getToday())}
+            onClick={() => {
+              const today = getToday();
+              setCurrentDate(today);
+              // If in week/month view, navigate to the period containing today
+              if (view === 'week') {
+                setCurrentDate(startOfWeek(today, { weekStartsOn: 1 }));
+              } else if (view === 'month') {
+                setCurrentDate(startOfMonth(today));
+              } else {
+                setCurrentDate(today);
+              }
+            }}
             className="h-7 px-2 text-xs"
           >
             Today

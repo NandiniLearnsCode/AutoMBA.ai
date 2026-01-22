@@ -5,11 +5,11 @@ import { Avatar, AvatarFallback } from "@/app/components/ui/avatar";
 
 export function ProfileSection() {
   const userProfile = {
-    name: "Alex Chen",
-    email: "alex.chen@mba.school.edu",
+    name: "Siddhant Patra",
+    email: "spatra26@gsb.columbia.edu",
     program: "MBA Class of 2026",
     semester: "Spring Semester",
-    initials: "AC",
+    initials: "SP",
     integrations: {
       googleCalendar: true,
       canvas: true,
