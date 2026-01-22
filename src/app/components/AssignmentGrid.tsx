@@ -392,29 +392,29 @@ export function AssignmentGrid() {
         return itemDate >= now && itemDate <= endOfYear;
       });
       
-      // Extract unique dates from Google Calendar events
-      const calendarDates = new Set<string>();
+      // Extract unique months from Google Calendar events
+      const calendarMonths = new Set<string>();
       if (calendarEvents.length > 0) {
         calendarEvents.forEach((calEvent: any) => {
           const calDateStr = calEvent.start?.dateTime || calEvent.start?.date;
           if (calDateStr) {
             try {
               const calDate = parseISO(calDateStr);
-              // Store as YYYY-MM-DD for easy comparison
-              const dateKey = `${calDate.getFullYear()}-${String(calDate.getMonth() + 1).padStart(2, '0')}-${String(calDate.getDate()).padStart(2, '0')}`;
-              calendarDates.add(dateKey);
+              // Store as YYYY-MM for month comparison
+              const monthKey = `${calDate.getFullYear()}-${String(calDate.getMonth() + 1).padStart(2, '0')}`;
+              calendarMonths.add(monthKey);
             } catch {
               // Skip invalid dates
             }
           }
         });
-        console.log(`📅 Found ${calendarDates.size} unique dates in Google Calendar events`);
+        console.log(`📅 Found ${calendarMonths.size} unique months in Google Calendar events:`, Array.from(calendarMonths).sort());
       }
       
-      // Match Canvas items with Google Calendar events by date only
-      // Show Canvas items that have dates matching any calendar event date
+      // Match Canvas items with Google Calendar events by month
+      // Show Canvas items that have dates in the same month as any calendar event
       const syncedItems = dateFilteredItems.filter((canvasItem) => {
-        if (calendarEvents.length === 0 || calendarDates.size === 0) {
+        if (calendarEvents.length === 0 || calendarMonths.size === 0) {
           // If no calendar events, show all Canvas items
           return true;
         }
@@ -452,16 +452,16 @@ export function AssignmentGrid() {
           return false;
         }
         
-        // Check if Canvas item date matches any calendar event date
-        const itemDateKey = `${itemDate.getFullYear()}-${String(itemDate.getMonth() + 1).padStart(2, '0')}-${String(itemDate.getDate()).padStart(2, '0')}`;
-        return calendarDates.has(itemDateKey);
+        // Check if Canvas item month matches any calendar event month
+        const itemMonthKey = `${itemDate.getFullYear()}-${String(itemDate.getMonth() + 1).padStart(2, '0')}`;
+        return calendarMonths.has(itemMonthKey);
       });
       
       const assignmentsCount = syncedItems.filter(i => i.type === 'assignment').length;
       const quizzesCount = syncedItems.filter(i => i.type === 'quiz').length;
       const announcementsCount = syncedItems.filter(i => i.type === 'announcement').length;
       const calendarCount = syncedItems.filter(i => i.type === 'calendar_event').length;
-      console.log(`📅 Found ${assignmentsCount} assignments, ${quizzesCount} quizzes, ${announcementsCount} announcements, ${calendarCount} calendar events on dates matching Google Calendar`);
+      console.log(`📅 Found ${assignmentsCount} assignments, ${quizzesCount} quizzes, ${announcementsCount} announcements, ${calendarCount} calendar events in months matching Google Calendar`);
       
       // Convert to our format and filter out nulls
       const converted = syncedItems
@@ -663,8 +663,8 @@ export function AssignmentGrid() {
         )}
         {filteredItems.length === 0 && !loadingItems && hasTriedFetch && !connectionError && (
           <div className="text-center py-8 text-sm text-muted-foreground">
-            <p>No {activeTab === "all" ? "items" : activeTab} found on dates matching your Google Calendar.</p>
-            <p className="text-xs mt-1">Canvas items are shown only if they have dates matching your Google Calendar events (same day).</p>
+            <p>No {activeTab === "all" ? "items" : activeTab} found in months matching your Google Calendar.</p>
+            <p className="text-xs mt-1">Canvas items are shown only if they have dates in the same month as your Google Calendar events.</p>
             <p className="text-xs mt-1">Make sure both Canvas and Google Calendar are connected.</p>
             <p className="text-xs mt-1">Check browser console (F12) for details.</p>
           </div>
