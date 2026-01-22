@@ -202,6 +202,65 @@ app.post('/mcp', async (req, res) => {
               }
             },
             {
+              name: 'list_user_course_items',
+              description: 'List all assignments, quizzes, announcements, and calendar events across all courses for the user',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  include: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'Additional information to include'
+                  }
+                }
+              }
+            },
+            {
+              name: 'list_announcements',
+              description: 'List announcements for a course',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  courseId: {
+                    type: 'string',
+                    description: 'Course ID'
+                  }
+                },
+                required: ['courseId']
+              }
+            },
+            {
+              name: 'list_quizzes',
+              description: 'List quizzes for a course',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  courseId: {
+                    type: 'string',
+                    description: 'Course ID'
+                  }
+                },
+                required: ['courseId']
+              }
+            },
+            {
+              name: 'list_calendar_events',
+              description: 'List calendar events for the user',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  start_date: {
+                    type: 'string',
+                    description: 'Start date (ISO format)'
+                  },
+                  end_date: {
+                    type: 'string',
+                    description: 'End date (ISO format)'
+                  }
+                }
+              }
+            },
+            {
               name: 'get_user_profile',
               description: 'Get the authenticated user\'s profile information',
               inputSchema: {
@@ -331,6 +390,187 @@ app.post('/mcp', async (req, res) => {
                 }
               ]
             };
+            break;
+
+          case 'list_announcements':
+            // Announcements are discussion topics with is_announcement=true
+            const announcements = await canvasRequest(`/courses/${args.courseId}/discussion_topics?only_announcements=true&per_page=100`);
+            result = {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(announcements)
+                }
+              ]
+            };
+            break;
+
+          case 'list_quizzes':
+            const quizzes = await canvasRequest(`/courses/${args.courseId}/quizzes?per_page=100`);
+            result = {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(quizzes)
+                }
+              ]
+            };
+            break;
+
+          case 'list_calendar_events':
+            // Canvas calendar events
+            const calendarParams = new URLSearchParams();
+            if (args?.start_date) {
+              calendarParams.append('start_date', args.start_date);
+            }
+            if (args?.end_date) {
+              calendarParams.append('end_date', args.end_date);
+            }
+            const calendarEvents = await canvasRequest(`/calendar_events?${calendarParams.toString()}&per_page=100`);
+            result = {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify(calendarEvents)
+                }
+              ]
+            };
+            break;
+
+          case 'list_user_course_items':
+            // Get all assignments, quizzes, announcements, and calendar events across all courses
+            const itemsStartTime = Date.now();
+            console.log('📚 Fetching Canvas courses for all items...');
+            const userCoursesForItems = await canvasRequest('/courses?enrollment_type=student&enrollment_state=active');
+            console.log(`✅ Found ${userCoursesForItems.length} courses, fetching assignments, quizzes, announcements, and calendar events in parallel...`);
+            
+            // Fetch all items for all courses in parallel
+            const allItemsPromises = userCoursesForItems.map(async (course) => {
+              try {
+                const [assignments, announcements, quizzes] = await Promise.all([
+                  // Assignments
+                  canvasRequest(`/courses/${course.id}/assignments?include[]=submission&per_page=100&order_by=due_at`).catch(() => []),
+                  // Announcements (discussion topics with is_announcement=true)
+                  canvasRequest(`/courses/${course.id}/discussion_topics?only_announcements=true&per_page=100`).catch(() => []),
+                  // Quizzes
+                  canvasRequest(`/courses/${course.id}/quizzes?per_page=100`).catch(() => [])
+                ]);
+                
+                // Format assignments
+                const formattedAssignments = assignments.map(a => ({
+                  type: 'assignment',
+                  id: a.id,
+                  name: a.name,
+                  due_at: a.due_at,
+                  unlock_at: a.unlock_at,
+                  lock_at: a.lock_at,
+                  course_id: a.course_id,
+                  course_name: course.name,
+                  course_code: course.course_code,
+                  points_possible: a.points_possible,
+                  submission: a.submission ? {
+                    workflow_state: a.submission.workflow_state,
+                    submitted_at: a.submission.submitted_at,
+                    body: a.submission.body,
+                  } : null,
+                }));
+                
+                // Format announcements
+                const formattedAnnouncements = announcements.map(a => ({
+                  type: 'announcement',
+                  id: a.id,
+                  name: a.title,
+                  posted_at: a.posted_at,
+                  created_at: a.created_at,
+                  course_id: course.id,
+                  course_name: course.name,
+                  course_code: course.course_code,
+                  message: a.message,
+                }));
+                
+                // Format quizzes
+                const formattedQuizzes = quizzes.map(q => ({
+                  type: 'quiz',
+                  id: q.id,
+                  name: q.title,
+                  due_at: q.due_at,
+                  unlock_at: q.unlock_at,
+                  lock_at: q.lock_at,
+                  course_id: course.id,
+                  course_name: course.name,
+                  course_code: course.course_code,
+                  points_possible: q.points_possible,
+                  question_count: q.question_count,
+                  allowed_attempts: q.allowed_attempts,
+                }));
+                
+                return [...formattedAssignments, ...formattedAnnouncements, ...formattedQuizzes];
+              } catch (error) {
+                console.warn(`⚠️ Failed to fetch items for course ${course.id} (${course.name}):`, error.message);
+                return [];
+              }
+            });
+            
+            // Fetch calendar events separately (not per course)
+            let calendarEvents = [];
+            try {
+              const today = new Date();
+              const nextYear = new Date(today.getFullYear() + 1, 11, 31);
+              calendarEvents = await canvasRequest(`/calendar_events?start_date=${today.toISOString().split('T')[0]}&end_date=${nextYear.toISOString().split('T')[0]}&per_page=100`).catch(() => []);
+              
+              // Format calendar events
+              const formattedCalendarEvents = calendarEvents.map(e => ({
+                type: 'calendar_event',
+                id: e.id,
+                name: e.title,
+                start_at: e.start_at,
+                end_at: e.end_at,
+                location_name: e.location_name,
+                context_code: e.context_code, // e.g., "course_12345"
+                description: e.description,
+              }));
+              
+              // Wait for all course items
+              const allItemsArrays = await Promise.all(allItemsPromises);
+              const allCourseItems = allItemsArrays.flat();
+              const allItems = [...allCourseItems, ...formattedCalendarEvents];
+              
+              const itemsDuration = Date.now() - itemsStartTime;
+              const assignmentsCount = allItems.filter(i => i.type === 'assignment').length;
+              const announcementsCount = allItems.filter(i => i.type === 'announcement').length;
+              const quizzesCount = allItems.filter(i => i.type === 'quiz').length;
+              const calendarCount = allItems.filter(i => i.type === 'calendar_event').length;
+              console.log(`✅ Fetched ${assignmentsCount} assignments, ${announcementsCount} announcements, ${quizzesCount} quizzes, ${calendarCount} calendar events from ${userCoursesForItems.length} courses in ${itemsDuration}ms`);
+              
+              result = {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify(allItems)
+                  }
+                ]
+              };
+            } catch (calendarError) {
+              console.warn('⚠️ Failed to fetch calendar events:', calendarError.message);
+              // Still return course items even if calendar fails
+              const allItemsArrays = await Promise.all(allItemsPromises);
+              const allItems = allItemsArrays.flat();
+              
+              const itemsDuration = Date.now() - itemsStartTime;
+              const assignmentsCount = allItems.filter(i => i.type === 'assignment').length;
+              const announcementsCount = allItems.filter(i => i.type === 'announcement').length;
+              const quizzesCount = allItems.filter(i => i.type === 'quiz').length;
+              console.log(`✅ Fetched ${assignmentsCount} assignments, ${announcementsCount} announcements, ${quizzesCount} quizzes from ${userCoursesForItems.length} courses in ${itemsDuration}ms`);
+              
+              result = {
+                content: [
+                  {
+                    type: 'text',
+                    text: JSON.stringify(allItems)
+                  }
+                ]
+              };
+            }
             break;
 
           case 'get_user_profile':
