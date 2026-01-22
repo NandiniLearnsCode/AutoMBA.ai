@@ -234,38 +234,39 @@ export function AssignmentGrid() {
       const canvasAssignments = parseCanvasResponse(response);
       console.log(`✅ Found ${canvasAssignments.length} Canvas assignments in ${Date.now() - startTime}ms`);
 
-      // Filter to show current month and future months only (exclude past months)
-      const today = getToday();
-      const monthStart = startOfMonth(today);
-      monthStart.setHours(0, 0, 0, 0);
+      // Filter to show only assignments with due dates from January 2026 onwards
+      const january2026 = new Date(2026, 0, 1); // January 1, 2026
+      january2026.setHours(0, 0, 0, 0);
       
-      console.log(`📅 Filtering assignments: monthStart = ${format(monthStart, 'yyyy-MM-dd')}, today = ${format(today, 'yyyy-MM-dd')}`);
+      console.log(`📅 Filtering assignments: Only showing assignments with due dates from ${format(january2026, 'MMMM yyyy')} onwards`);
       
-      // Filter assignments by due date - show current month and future only
-      const currentAndFutureAssignments = canvasAssignments.filter((canvasAssignment) => {
+      // Filter assignments by due date - show only January 2026 and future
+      const jan2026AndFutureAssignments = canvasAssignments.filter((canvasAssignment) => {
         if (!canvasAssignment.due_at) {
-          // Include assignments without due dates (they might be upcoming)
-          return true;
+          // Exclude assignments without due dates
+          console.log(`❌ Excluding assignment without due date: ${canvasAssignment.name}`);
+          return false;
         }
         
         try {
           const dueDate = parseISO(canvasAssignment.due_at);
-          // Include if due date is in current month or future
-          const isIncluded = dueDate >= monthStart;
+          // Include if due date is January 2026 or later
+          const isIncluded = dueDate >= january2026;
           if (!isIncluded) {
-            console.log(`❌ Excluding assignment: ${canvasAssignment.name} - due date: ${format(dueDate, 'yyyy-MM-dd')} < ${format(monthStart, 'yyyy-MM-dd')}`);
+            console.log(`❌ Excluding assignment: ${canvasAssignment.name} - due date: ${format(dueDate, 'yyyy-MM-dd')} < ${format(january2026, 'yyyy-MM-dd')}`);
           }
           return isIncluded;
         } catch {
-          // If we can't parse the date, include it
-          return true;
+          // If we can't parse the date, exclude it
+          console.log(`❌ Excluding assignment with invalid date: ${canvasAssignment.name}`);
+          return false;
         }
       });
       
-      console.log(`📅 Filtered to ${currentAndFutureAssignments.length} assignments for current & future months (out of ${canvasAssignments.length} total)`);
+      console.log(`📅 Filtered to ${jan2026AndFutureAssignments.length} assignments from January 2026 onwards (out of ${canvasAssignments.length} total)`);
 
       // Convert to our format and filter out nulls
-      const converted = currentAndFutureAssignments
+      const converted = jan2026AndFutureAssignments
         .map(convertCanvasAssignment)
         .filter((a): a is Assignment => a !== null);
 
@@ -320,7 +321,7 @@ export function AssignmentGrid() {
       <div className="flex items-center justify-between mb-4">
         <div>
           <h3 className="font-semibold">Canvas Assignments</h3>
-          <p className="text-xs text-muted-foreground mt-0.5">{format(getToday(), 'MMMM yyyy')} & Future</p>
+          <p className="text-xs text-muted-foreground mt-0.5">January 2026 & Future</p>
         </div>
         <div className="flex items-center gap-2">
           {loadingAssignments && (
@@ -368,8 +369,8 @@ export function AssignmentGrid() {
         )}
         {assignments.length === 0 && !loadingAssignments && hasTriedFetch && !connectionError && (
           <div className="text-center py-8 text-sm text-muted-foreground">
-            <p>No assignments found for {format(getToday(), 'MMMM yyyy')} and future months.</p>
-            <p className="text-xs mt-1">Make sure Canvas is connected and you have assignments due this month or later.</p>
+            <p>No assignments found for January 2026 and future months.</p>
+            <p className="text-xs mt-1">Make sure Canvas is connected and you have assignments with due dates from January 2026 onwards.</p>
             <p className="text-xs mt-1">Check browser console (F12) for details.</p>
           </div>
         )}
@@ -405,16 +406,6 @@ export function AssignmentGrid() {
               <Clock className="w-3 h-3" />
               <span>{assignment.estimatedTime}</span>
             </div>
-
-            {assignment.status !== "completed" && (
-              <div className="space-y-1">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-muted-foreground">Progress</span>
-                  <span className="font-semibold">{assignment.progress}%</span>
-                </div>
-                <Progress value={assignment.progress} className="h-1.5" />
-              </div>
-            )}
 
             {assignment.status === "completed" && (
               <div className="text-xs text-green-500 font-semibold">✓ Completed</div>
