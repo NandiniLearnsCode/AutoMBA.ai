@@ -23,9 +23,9 @@ export function AgentSuggestion({ type, title, description, action, dismiss }: A
   };
 
   const colors = {
-    conflict: "border-orange-500/30 bg-orange-500/5",
-    optimization: "border-blue-500/30 bg-blue-500/5",
-    alert: "border-yellow-500/30 bg-yellow-500/5",
+    conflict: "border-orange-500 bg-orange-50", // Type A: Warning (orange)
+    optimization: "border-blue-500 bg-blue-50", // Type B: Info (blue)
+    alert: "border-orange-500 bg-orange-50", // Also orange for warnings
     success: "border-green-500/30 bg-green-500/5",
   };
 
