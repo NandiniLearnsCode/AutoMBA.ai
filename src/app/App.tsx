@@ -16,7 +16,7 @@ import { getMcpServerConfigs } from "@/config/mcpServers";
 import { toast } from "sonner";
 import { generateAIRecommendations, AIRecommendation } from "@/utils/aiRecommendationService";
 import { useMcpServer } from "@/hooks/useMcpServer";
-import { getToday } from "@/utils/dateUtils";
+import { getToday, getUserTimezone } from "@/utils/dateUtils";
 import { startOfDay, endOfDay, format } from "date-fns";
 
 function AppContent() {
@@ -57,12 +57,14 @@ function AppContent() {
         dayStart.setHours(0, 0, 0, 0);
         dayEnd.setHours(23, 59, 59, 999);
 
-        // Load today's events
+        // Load today's events (use user timezone for consistent display)
+        const tz = getUserTimezone();
         const response = await callTool('list_events', {
           calendarId: 'primary',
           timeMin: dayStart.toISOString(),
           timeMax: dayEnd.toISOString(),
           maxResults: 50,
+          timeZone: tz,
         });
 
         // Parse events
@@ -93,7 +95,8 @@ function AppContent() {
             const timeStr = start.toLocaleTimeString('en-US', { 
               hour: '2-digit', 
               minute: '2-digit', 
-              hour12: false 
+              hour12: false,
+              timeZone: tz,
             });
 
             const summary = event.summary || 'Untitled Event';

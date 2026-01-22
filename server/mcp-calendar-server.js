@@ -142,6 +142,10 @@ app.post('/mcp', async (req, res) => {
                     type: 'number',
                     description: 'Maximum number of events',
                     default: 250
+                  },
+                  timeZone: {
+                    type: 'string',
+                    description: 'IANA timezone (e.g. America/New_York) for consistent event times'
                   }
                 }
               }
@@ -235,14 +239,16 @@ app.post('/mcp', async (req, res) => {
             break;
 
           case 'list_events':
-            const eventsResponse = await calendar.events.list({
+            const listOpts = {
               calendarId: args?.calendarId || 'primary',
               timeMin: args?.timeMin || new Date().toISOString(),
               timeMax: args?.timeMax,
               maxResults: args?.maxResults || 250,
               singleEvents: true,
               orderBy: 'startTime'
-            });
+            };
+            if (args?.timeZone) listOpts.timeZone = args.timeZone;
+            const eventsResponse = await calendar.events.list(listOpts);
             result = {
               content: [
                 {

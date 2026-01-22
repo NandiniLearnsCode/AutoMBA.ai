@@ -22,3 +22,15 @@ export function isToday(date: Date): boolean {
     date.getDate() === today.getDate()
   );
 }
+
+/**
+ * User's IANA timezone (e.g. "America/New_York") for consistent calendar display.
+ * Use when formatting times so calendar events render in the user's local timezone.
+ */
+export function getUserTimezone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  } catch {
+    return "UTC";
+  }
+}

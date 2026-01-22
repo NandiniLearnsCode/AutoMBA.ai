@@ -6,7 +6,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/app/components/ui/toggle-group";
 import { useMcpServer } from "@/hooks/useMcpServer";
 import { DndContext, DragEndEvent, useDraggable, useDroppable, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, eachDayOfInterval, addWeeks, subWeeks, addMonths, subMonths, isSameDay, isSameMonth } from "date-fns";
-import { getToday, isToday as isTodayGlobal } from "@/utils/dateUtils";
+import { getToday, isToday as isTodayGlobal, getUserTimezone } from "@/utils/dateUtils";
 
 interface TimeBlock {
   id: string;
@@ -100,7 +100,7 @@ function DraggableEvent({ block, index, isLast, typeConfig }: { block: TimeBlock
             <h4 className="font-semibold text-sm">{block.title}</h4>
           </div>
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            <span>{block.duration} min</span>
+            <span>{block.time === "All day" ? "All day" : `${block.duration} min`}</span>
             {block.location && <span>• {block.location}</span>}
             {block.status === "current" && (
               <span className="text-blue-500 font-semibold">• In Progress</span>
@@ -247,49 +247,52 @@ function MonthView({ timeBlocks, currentDate, typeConfig }: { timeBlocks: TimeBl
   );
 }
 
-// Parse MCP event response to TimeBlock format
+// Parse MCP event response to TimeBlock format. Uses getUserTimezone() so all times display in the user's local timezone.
 function parseMcpEvent(event: CalendarEvent): TimeBlock | null {
   try {
+    const tz = getUserTimezone();
+    const hasDateTime = !!(event.start?.dateTime && event.end?.dateTime);
     const startTime = event.start?.dateTime || event.start?.date;
     if (!startTime) return null;
-    
-    const start = new Date(startTime);
-    const end = new Date(event.end?.dateTime || event.end?.date || startTime);
-    const duration = Math.round((end.getTime() - start.getTime()) / (1000 * 60)); // minutes
-    
+
+    // All-day events use date only (YYYY-MM-DD). Parse as local midnight to avoid UTC-offset bugs.
+    let start: Date;
+    let end: Date;
+    let timeStr: string;
+    let duration: number;
+
+    if (!hasDateTime && event.start?.date && event.end?.date) {
+      start = new Date(event.start.date + "T00:00:00");
+      end = new Date(event.end.date + "T00:00:00"); // Google uses exclusive end (next-day midnight)
+      duration = Math.round((end.getTime() - start.getTime()) / (1000 * 60));
+      timeStr = "All day";
+    } else {
+      start = new Date(event.start!.dateTime ?? event.start!.date!);
+      end = new Date(event.end?.dateTime || event.end?.date || startTime);
+      duration = Math.round((end.getTime() - start.getTime()) / (1000 * 60));
+      timeStr = start.toLocaleTimeString("en-US", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+        timeZone: tz,
+      });
+    }
+
     const now = new Date();
     let status: "completed" | "current" | "upcoming" | "suggested" = "upcoming";
-    if (end < now) {
-      status = "completed";
-    } else if (start <= now && end >= now) {
-      status = "current";
-    }
-    
-    // Determine event type from summary/title
-    const summary = event.summary || 'Untitled Event';
+    if (end < now) status = "completed";
+    else if (start <= now && end >= now) status = "current";
+
+    const summary = event.summary || "Untitled Event";
     const lowerSummary = summary.toLowerCase();
     let type: "class" | "meeting" | "study" | "workout" | "networking" | "recruiting" | "buffer" = "meeting";
-    
-    if (lowerSummary.includes('class') || lowerSummary.includes('course') || lowerSummary.includes('lecture')) {
-      type = "class";
-    } else if (lowerSummary.includes('study') || lowerSummary.includes('homework') || lowerSummary.includes('assignment')) {
-      type = "study";
-    } else if (lowerSummary.includes('gym') || lowerSummary.includes('workout') || lowerSummary.includes('exercise')) {
-      type = "workout";
-    } else if (lowerSummary.includes('coffee') || lowerSummary.includes('networking') || lowerSummary.includes('chat')) {
-      type = "networking";
-    } else if (lowerSummary.includes('recruiting') || lowerSummary.includes('interview') || lowerSummary.includes('info session')) {
-      type = "recruiting";
-    } else if (lowerSummary.includes('buffer') || lowerSummary.includes('travel')) {
-      type = "buffer";
-    }
-    
-    const timeStr = start.toLocaleTimeString('en-US', { 
-      hour: '2-digit', 
-      minute: '2-digit', 
-      hour12: false 
-    });
-    
+    if (lowerSummary.includes("class") || lowerSummary.includes("course") || lowerSummary.includes("lecture")) type = "class";
+    else if (lowerSummary.includes("study") || lowerSummary.includes("homework") || lowerSummary.includes("assignment")) type = "study";
+    else if (lowerSummary.includes("gym") || lowerSummary.includes("workout") || lowerSummary.includes("exercise")) type = "workout";
+    else if (lowerSummary.includes("coffee") || lowerSummary.includes("networking") || lowerSummary.includes("chat")) type = "networking";
+    else if (lowerSummary.includes("recruiting") || lowerSummary.includes("interview") || lowerSummary.includes("info session")) type = "recruiting";
+    else if (lowerSummary.includes("buffer") || lowerSummary.includes("travel")) type = "buffer";
+
     return {
       id: event.id,
       time: timeStr,
@@ -299,11 +302,11 @@ function parseMcpEvent(event: CalendarEvent): TimeBlock | null {
       status,
       location: event.location,
       priority: "hard-block" as const,
-      startDate: start, // Store for drag-and-drop updates
-      endDate: end, // Store for drag-and-drop updates
+      startDate: start,
+      endDate: end,
     };
   } catch (error) {
-    console.error('Error parsing MCP event:', error);
+    console.error("Error parsing MCP event:", error);
     return null;
   }
 }
@@ -420,6 +423,7 @@ export function TimelineView() {
         calendarCount: allCalendars.length,
       });
       
+      const tz = getUserTimezone();
       const eventPromises = allCalendars.map(async (cal: any) => {
         try {
           const response = await callTool('list_events', {
@@ -427,6 +431,7 @@ export function TimelineView() {
             timeMin: startDate.toISOString(),
             timeMax: endDate.toISOString(),
             maxResults: 500,
+            timeZone: tz,
           });
           
           // Parse response

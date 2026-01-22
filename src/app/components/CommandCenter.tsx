@@ -2,7 +2,7 @@ import { Sparkles, Target, Zap, Calendar } from "lucide-react";
 import { Card } from "@/app/components/ui/card";
 import { Badge } from "@/app/components/ui/badge";
 import { format, startOfDay, endOfDay } from "date-fns";
-import { getToday } from "@/utils/dateUtils";
+import { getToday, getUserTimezone } from "@/utils/dateUtils";
 import { useMcpServer } from "@/hooks/useMcpServer";
 import { useEffect, useState } from "react";
 
@@ -70,6 +70,8 @@ export function CommandCenter({ events: propEvents = [], userFocus }: CommandCen
           allCalendars = [{ id: 'primary', summary: 'Primary Calendar' }];
         }
 
+        const tz = getUserTimezone();
+
         // Fetch events from all calendars in parallel
         const eventPromises = allCalendars.map(async (cal: any) => {
           try {
@@ -78,6 +80,7 @@ export function CommandCenter({ events: propEvents = [], userFocus }: CommandCen
               timeMin: dayStart.toISOString(),
               timeMax: dayEnd.toISOString(),
               maxResults: 50,
+              timeZone: tz,
             });
 
             // Parse events
@@ -105,21 +108,34 @@ export function CommandCenter({ events: propEvents = [], userFocus }: CommandCen
         const allEventArrays = await Promise.all(eventPromises);
         const calendarEvents = allEventArrays.flat(); // Combine all events
 
-        // Convert to CalendarEvent format
+        // Convert to CalendarEvent format (use user timezone for time display)
         const parsedEvents: CalendarEvent[] = calendarEvents
           .map((event: any) => {
+            const hasDateTime = !!(event.start?.dateTime && event.end?.dateTime);
             const startTime = event.start?.dateTime || event.start?.date;
             if (!startTime) return null;
             
-            const start = new Date(startTime);
-            const end = new Date(event.end?.dateTime || event.end?.date || startTime);
-            const duration = Math.round((end.getTime() - start.getTime()) / (1000 * 60));
-            
-            const timeStr = start.toLocaleTimeString('en-US', { 
-              hour: '2-digit', 
-              minute: '2-digit', 
-              hour12: false 
-            });
+            let start: Date;
+            let end: Date;
+            let timeStr: string;
+            let duration: number;
+
+            if (!hasDateTime && event.start?.date && event.end?.date) {
+              start = new Date(event.start.date + "T00:00:00");
+              end = new Date(event.end.date + "T00:00:00");
+              duration = Math.round((end.getTime() - start.getTime()) / (1000 * 60));
+              timeStr = "All day";
+            } else {
+              start = new Date(event.start?.dateTime ?? event.start?.date);
+              end = new Date(event.end?.dateTime || event.end?.date || startTime);
+              duration = Math.round((end.getTime() - start.getTime()) / (1000 * 60));
+              timeStr = start.toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false,
+                timeZone: tz,
+              });
+            }
 
             const summary = event.summary || 'Untitled Event';
             const lowerSummary = summary.toLowerCase();
