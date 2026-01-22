@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { MessageSquare, Send, X, Brain, Check, Clock, Calendar, Sparkles } from "lucide-react";
 import { Button } from "@/app/components/ui/button";
 import { Card } from "@/app/components/ui/card";
@@ -8,7 +8,8 @@ import { ScrollArea } from "@/app/components/ui/scroll-area";
 import { motion, AnimatePresence } from "motion/react";
 import { getOpenAIApiKey } from "@/config/apiKey";
 import { useMcpServer } from "@/hooks/useMcpServer";
-import { format, startOfWeek, endOfWeek, addDays, addWeeks, addMonths, startOfDay, endOfDay } from "date-fns";
+import { format, startOfWeek, endOfWeek, addDays, addWeeks, addMonths, startOfDay, endOfDay, startOfMonth, endOfMonth } from "date-fns";
+import { getToday } from "@/utils/dateUtils";
 
 // ParsedEvent type (matching the format from googleCalendar.ts)
 interface ParsedEvent {
@@ -55,9 +56,11 @@ interface Message {
 
 interface NexusChatbotProps {
   onScheduleChange?: (action: string, details: any) => void;
+  onSendMessageFromExternal?: (message: string) => void;
+  isHidden?: boolean; // For inline chat mode
 }
 
-export function NexusChatbot({ onScheduleChange }: NexusChatbotProps) {
+export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHidden = false }: NexusChatbotProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -281,6 +284,54 @@ export function NexusChatbot({ onScheduleChange }: NexusChatbotProps) {
     }
   }, []);
 
+  // Generate initial suggestions based on calendar events
+  const generateInitialSuggestions = useCallback((events: ParsedEvent[]): string[] => {
+    const suggestions: string[] = [];
+    
+    if (events.length === 0) {
+      return ["I've loaded your calendar, but I don't see any events scheduled. Would you like me to help you plan your day?"];
+    }
+
+    // Check for tight schedules (events back-to-back)
+    const sortedEvents = [...events].sort((a, b) => {
+      const timeA = a.time.split(':').map(Number);
+      const timeB = b.time.split(':').map(Number);
+      return timeA[0] * 60 + timeA[1] - (timeB[0] * 60 + timeB[1]);
+    });
+
+    for (let i = 0; i < sortedEvents.length - 1; i++) {
+      const current = sortedEvents[i];
+      const next = sortedEvents[i + 1];
+      
+      const currentTime = current.time.split(':').map(Number);
+      const nextTime = next.time.split(':').map(Number);
+      const currentEnd = currentTime[0] * 60 + currentTime[1] + current.duration;
+      const nextStart = nextTime[0] * 60 + nextTime[1];
+      
+      if (currentEnd >= nextStart) {
+        const currentEndHour = Math.floor(currentEnd / 60);
+        const currentEndMin = currentEnd % 60;
+        const timeStr = `${currentEndHour.toString().padStart(2, '0')}:${currentEndMin.toString().padStart(2, '0')}`;
+        suggestions.push(
+          `I noticed a tight schedule: "${current.title}" ends at ${timeStr} and "${next.title}" starts immediately after. I recommend adding a 15-minute buffer between these events. Would you like me to reschedule "${next.title}" to start 15 minutes later?`
+        );
+        break; // Only suggest one at a time
+      }
+    }
+
+    // If no conflicts, suggest optimization
+    if (suggestions.length === 0 && events.length > 0) {
+      const todayEvents = events.filter(e => e.status === "upcoming" || e.status === "current");
+      if (todayEvents.length > 0) {
+        suggestions.push(
+          `I've analyzed your calendar for today. You have ${todayEvents.length} upcoming event${todayEvents.length > 1 ? 's' : ''}. Your schedule looks balanced! Is there anything specific you'd like me to optimize or adjust?`
+        );
+      }
+    }
+
+    return suggestions;
+  }, []);
+
   const scrollToBottom = () => {
     // Use setTimeout to ensure DOM is updated
     setTimeout(() => {
@@ -363,18 +414,21 @@ When suggesting actions (moving, canceling, adding events), format your response
     }
   };
 
-  const handleSendMessage = async () => {
-    if (!inputValue.trim()) return;
+  // Expose handleSendMessage for external use (inline chat mode)
+  const handleSendMessage = async (externalMessage?: string) => {
+    const messageToSend = externalMessage || inputValue.trim();
+    if (!messageToSend) return;
 
-    const userInput = inputValue.trim();
-    setInputValue("");
+    if (!externalMessage) {
+      setInputValue("");
+    }
     setIsTyping(true);
 
     // Add user message immediately
     const userMessage: Message = {
       id: Date.now().toString(),
       type: "user",
-      content: userInput,
+      content: messageToSend,
       timestamp: new Date(),
     };
 
@@ -413,7 +467,7 @@ When suggesting actions (moving, canceling, adding events), format your response
         });
 
       // Parse date range from user input and load relevant events
-      const dateRange = parseDateFromInput(userInput);
+      const dateRange = parseDateFromInput(messageToSend);
       
       // Load events for the detected date range and use the returned events directly
       const relevantEvents = await loadCalendarEvents(dateRange);
@@ -422,7 +476,7 @@ When suggesting actions (moving, canceling, adding events), format your response
       const eventsArray = Array.isArray(relevantEvents) ? relevantEvents : [];
 
       // Call OpenAI API with calendar context
-      const aiResponse = await callOpenAI(userInput, conversationHistory, eventsArray.length > 0 ? eventsArray : undefined);
+      const aiResponse = await callOpenAI(messageToSend, conversationHistory, eventsArray.length > 0 ? eventsArray : undefined);
 
       // Parse response to determine if it's an action or regular message
       // Only mark as action if it's clearly proposing a concrete, actionable change
@@ -432,11 +486,11 @@ When suggesting actions (moving, canceling, adding events), format your response
       let actionDetails = "";
 
       // Enhanced intent parsing for scheduling keywords
-      const lowerInput = userInput.toLowerCase();
+      const lowerInput = messageToSend.toLowerCase();
       
       // Check for specific scheduling intents
-      const hasScheduleIntent = /schedule|block time|study for/i.test(userInput);
-      const hasInsteadOfIntent = /instead of|replace/i.test(userInput);
+      const hasScheduleIntent = /schedule|block time|study for/i.test(messageToSend);
+      const hasInsteadOfIntent = /instead of|replace/i.test(messageToSend);
       
       // More conservative detection - only mark as action if it's proposing a specific action
       const actionPatterns = {
@@ -476,7 +530,7 @@ When suggesting actions (moving, canceling, adding events), format your response
               type: actionType,
               details: actionDetails,
               status: "pending",
-              userRequest: userInput, // Store user's original request for parsing
+              userRequest: messageToSend, // Store user's original request for parsing
             },
           }
         : {
@@ -724,6 +778,56 @@ When suggesting actions (moving, canceling, adding events), format your response
       handleSendMessage();
     }
   };
+
+  // Expose handleSendMessage, messages, and refresh function globally for inline chat access
+  React.useEffect(() => {
+    (window as any).__nexusChatbotSendMessage = handleSendMessage;
+    (window as any).__nexusChatbotMessages = messages;
+    (window as any).__nexusChatbotIsTyping = isTyping;
+    (window as any).__nexusChatbotRefresh = async () => {
+      // Clear messages and reload calendar, but don't automatically send suggestions
+      setMessages([{
+        id: "1",
+        type: "agent",
+        content: "Good morning. I'm your Nexus Executive Agent. I can help you optimize your schedule, manage conflicts, and maximize your Triple Bottom Line. What would you like to adjust today?",
+        timestamp: new Date(),
+      }]);
+      // Reload calendar in background (day, week, month)
+      const today = getToday();
+      const dayStart = startOfDay(today);
+      const dayEnd = endOfDay(today);
+      const weekStart = startOfWeek(today, { weekStartsOn: 1 });
+      const weekEnd = endOfWeek(today, { weekStartsOn: 1 });
+      const monthStart = startOfMonth(today);
+      const monthEnd = endOfMonth(today);
+      
+      await Promise.all([
+        loadCalendarEvents({ startDate: dayStart, endDate: dayEnd }),
+        loadCalendarEvents({ startDate: weekStart, endDate: weekEnd }),
+        loadCalendarEvents({ startDate: monthStart, endDate: monthEnd }),
+      ]);
+      // Calendar is reloaded, but we wait for user to explicitly ask for suggestions
+    };
+    (window as any).__nexusChatbotLoadCalendar = loadCalendarEvents;
+    (window as any).__nexusChatbotHandleApprove = handleApproveAction;
+    (window as any).__nexusChatbotHandleReject = handleRejectAction;
+    (window as any).__nexusChatbotGenerateSuggestions = generateInitialSuggestions;
+    return () => {
+      delete (window as any).__nexusChatbotSendMessage;
+      delete (window as any).__nexusChatbotMessages;
+      delete (window as any).__nexusChatbotIsTyping;
+      delete (window as any).__nexusChatbotRefresh;
+      delete (window as any).__nexusChatbotLoadCalendar;
+      delete (window as any).__nexusChatbotHandleApprove;
+      delete (window as any).__nexusChatbotHandleReject;
+      delete (window as any).__nexusChatbotGenerateSuggestions;
+    };
+  }, [messages, isTyping, loadCalendarEvents, generateInitialSuggestions]);
+
+  // If hidden mode, just expose the send function and return null
+  if (isHidden) {
+    return null;
+  }
 
   return (
     <>

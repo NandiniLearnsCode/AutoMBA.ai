@@ -1,29 +1,24 @@
-import { useState } from "react";
-import { Brain, LayoutGrid, LineChart, Heart, Bell, Settings as SettingsIcon } from "lucide-react";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/app/components/ui/tabs";
+import { useState, useRef } from "react";
+import { Bot, Bell, Settings as SettingsIcon } from "lucide-react";
 import { Button } from "@/app/components/ui/button";
 import { Badge } from "@/app/components/ui/badge";
-import { ScrollArea } from "@/app/components/ui/scroll-area";
 import { Toaster } from "@/app/components/ui/sonner";
 import { CommandCenter } from "@/app/components/CommandCenter";
 import { AgentSuggestion } from "@/app/components/AgentSuggestion";
 import { TimelineView } from "@/app/components/TimelineView";
 import { HealthMetrics } from "@/app/components/HealthMetrics";
 import { AssignmentGrid } from "@/app/components/AssignmentGrid";
-import { NetworkingLedger } from "@/app/components/NetworkingLedger";
-import { WeeklyStrategy } from "@/app/components/WeeklyStrategy";
-import { ROIDashboard } from "@/app/components/ROIDashboard";
 import { NexusChatbot } from "@/app/components/NexusChatbot";
+import { ChatInputCard } from "@/app/components/ChatInputCard";
+import { ProfileSection } from "@/app/components/ProfileSection";
 import { Settings } from "@/app/components/Settings";
 import { McpProvider } from "@/contexts/McpContext";
 import { getMcpServerConfigs } from "@/config/mcpServers";
 import { toast } from "sonner";
 
 function AppContent() {
-  // Google Calendar authentication is now handled by MCP server (backend)
-  
-  const [viewMode, setViewMode] = useState<"focus" | "strategy" | "recovery">("focus");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const chatbotRef = useRef<{ handleSendMessage: (message: string) => void } | null>(null);
   
   // Initialize suggestions with buffer-based logic and urgency detection
   const [suggestions, setSuggestions] = useState<
@@ -39,16 +34,23 @@ function AppContent() {
     {
       id: "1",
       type: "shift" as const,
-      title: "Shift Gym Session",
-      description: "Goldman Sachs Info Session at 1:00 PM overlaps with your scheduled gym session at 1:00 PM. Low HRV indicates you need recovery time. Move gym session to 2:00 PM to create a buffer.",
+      title: "Tight Schedule: No Buffer Time",
+      description: "Goldman Sachs Info Session ends at 1:00 PM, and your gym session starts immediately after at 1:00 PM. With Low HRV indicating you need recovery, I recommend pushing your gym session to 2:00 PM for a proper buffer.",
       eventId: "gym-session-1",
     },
     {
       id: "2",
       type: "urgency" as const,
       title: "Urgent Assignment Due Tomorrow",
-      description: "Valuation Case Study (Corporate Finance) is due in less than 48 hours and is only 35% complete. Schedule 2 hours to complete it.",
+      description: "Valuation Case Study is due Jan 22, 11:59 PM (35% complete, 4h remaining). I recommend scheduling 2 hours this afternoon at 2:00 PM when you have a gap after your gym session.",
       assignmentId: "1",
+    },
+    {
+      id: "3",
+      type: "urgency" as const,
+      title: "Operations Project Needs Attention",
+      description: "Operations Group Project is due Jan 23, 9:00 AM (only 20% complete, 6h remaining). You have limited time - I suggest blocking tonight 6:00-9:00 PM and tomorrow morning 6:00-9:00 AM.",
+      assignmentId: "5",
     },
   ]);
 
@@ -63,9 +65,6 @@ function AppContent() {
     try {
       // Handle assignment scheduling (type: 'study')
       if (suggestion.type === "urgency" && suggestionData?.assignmentId) {
-        // Get assignment data (in real app, would fetch from state/context)
-        // For now, we'll create a default study block
-        // This would typically use MCP create_event with type: 'study'
         toast.success("Study time scheduled", {
           description: "2-hour study block added to your calendar.",
         });
@@ -73,8 +72,6 @@ function AppContent() {
       
       // Handle event shifting (Gym session shift)
       if (suggestion.type === "shift" && suggestionData?.eventId) {
-        // Shift event by +60 minutes (1 hour)
-        // This would typically use MCP update_event
         toast.success("Event shifted", {
           description: "Gym session moved to 2:00 PM to create recovery buffer.",
         });
@@ -84,7 +81,7 @@ function AppContent() {
       setSuggestions(suggestions.filter((s) => s.id !== id));
       
       toast.success("Calendar updated successfully", {
-        description: "Your schedule has been optimized by Nexus Agent.",
+        description: "Your schedule has been optimized by Kaisey.",
       });
     } catch (error) {
       console.error("Error accepting suggestion:", error);
@@ -104,67 +101,35 @@ function AppContent() {
     });
   };
 
-  const getModeColor = (mode: string) => {
-    switch (mode) {
-      case "focus":
-        return "bg-blue-500";
-      case "strategy":
-        return "bg-purple-500";
-      case "recovery":
-        return "bg-green-500";
-      default:
-        return "bg-blue-500";
+  // Handle chat message from inline input
+  const handleChatMessage = (message: string) => {
+    // Access the chatbot's handleSendMessage via window (workaround)
+    // In a better implementation, we'd use a ref or context
+    if ((window as any).__nexusChatbotSendMessage) {
+      (window as any).__nexusChatbotSendMessage(message);
     }
   };
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <header className="border-b bg-card sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+      <header className="border-b bg-white sticky top-0 z-50">
+        <div className="max-w-4xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="p-2 rounded-lg bg-gradient-to-br from-blue-500 to-purple-500">
-              <Brain className="w-6 h-6 text-white" />
+              <Bot className="w-6 h-6 text-white" />
             </div>
             <div>
-              <h1 className="text-xl font-bold">Nexus</h1>
+              <h1 className="text-xl font-bold">Kaisey</h1>
               <p className="text-xs text-muted-foreground">MBA Co-Pilot</p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Mode Switcher */}
-            <div className="flex items-center gap-1 p-1 rounded-lg bg-muted">
-              <Button
-                size="sm"
-                variant={viewMode === "focus" ? "default" : "ghost"}
-                onClick={() => setViewMode("focus")}
-                className="text-xs h-8"
-              >
-                Focus
-              </Button>
-              <Button
-                size="sm"
-                variant={viewMode === "strategy" ? "default" : "ghost"}
-                onClick={() => setViewMode("strategy")}
-                className="text-xs h-8"
-              >
-                Strategy
-              </Button>
-              <Button
-                size="sm"
-                variant={viewMode === "recovery" ? "default" : "ghost"}
-                onClick={() => setViewMode("recovery")}
-                className="text-xs h-8"
-              >
-                Recovery
-              </Button>
-            </div>
-
             <Button size="sm" variant="outline" className="relative">
               <Bell className="w-4 h-4" />
               {suggestions.length > 0 && (
-                <Badge className="absolute -top-1 -right-1 h-5 w-5 p-0 flex items-center justify-center bg-red-500">
+                <Badge className="absolute -top-1 -right-1 h-5 w-5 p-0 flex items-center justify-center bg-red-500 text-white">
                   {suggestions.length}
                 </Badge>
               )}
@@ -186,25 +151,26 @@ function AppContent() {
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-6 py-6">
-        {/* Command Center */}
-        <div className="mb-6">
-          <CommandCenter />
-        </div>
+      {/* Main Content - Single Column Vertical Feed */}
+      <main className="max-w-4xl mx-auto px-6 py-6 space-y-6">
+        {/* Hero Section: Day at a Glance */}
+        <CommandCenter />
 
-        {/* Agent Suggestions */}
+        {/* Chat Input Card */}
+        <ChatInputCard onSendMessage={handleChatMessage} />
+
+        {/* Recommendations */}
         {suggestions.length > 0 && (
-          <div className="mb-6">
+          <div>
             <div className="flex items-center gap-2 mb-3">
-              <Brain className="w-4 h-4 text-blue-500" />
-              <h3 className="font-semibold">Agent Recommendations</h3>
+              <Bot className="w-4 h-4 text-blue-500" />
+              <h3 className="font-semibold">My Recommendations</h3>
               <Badge variant="outline" className="text-xs">{suggestions.length}</Badge>
             </div>
             {suggestions.map((suggestion) => (
               <AgentSuggestion
                 key={suggestion.id}
-                type={suggestion.type === "buffer" ? "alert" : suggestion.type === "urgency" ? "alert" : suggestion.type === "shift" ? "optimization" : suggestion.type}
+                type={suggestion.type === "buffer" || suggestion.type === "shift" ? "conflict" : suggestion.type === "urgency" ? "optimization" : suggestion.type}
                 title={suggestion.title}
                 description={suggestion.description}
                 action={{
@@ -221,94 +187,27 @@ function AppContent() {
           </div>
         )}
 
-        {/* View Modes */}
-        {viewMode === "focus" && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Left Column - Timeline */}
-            <div className="lg:col-span-2 space-y-6">
-              <TimelineView />
-              <AssignmentGrid />
-            </div>
+        {/* Calendar: Timeline View */}
+        <TimelineView />
 
-            {/* Right Column - Metrics & CRM */}
-            <div className="space-y-6">
-              <HealthMetrics />
-              <NetworkingLedger />
-            </div>
-          </div>
-        )}
+        {/* Canvas Assignments */}
+        <AssignmentGrid />
 
-        {viewMode === "strategy" && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Left Column - Weekly View */}
-            <div className="lg:col-span-2 space-y-6">
-              <WeeklyStrategy />
-              <ROIDashboard />
-              <AssignmentGrid />
-            </div>
-
-            {/* Right Column */}
-            <div className="space-y-6">
-              <NetworkingLedger />
-              <HealthMetrics />
-            </div>
-          </div>
-        )}
-
-        {viewMode === "recovery" && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Left Column - Health Focus */}
-            <div className="lg:col-span-2 space-y-6">
-              <HealthMetrics />
-              <TimelineView />
-            </div>
-
-            {/* Right Column */}
-            <div className="space-y-6">
-              <div className="rounded-lg border bg-card p-6">
-                <div className="text-center">
-                  <Heart className="w-12 h-12 mx-auto mb-4 text-green-500" />
-                  <h3 className="font-semibold mb-2">Recovery Mode</h3>
-                  <p className="text-sm text-muted-foreground mb-4">
-                    Your health metrics indicate you need rest. The agent has suggested moving non-critical tasks.
-                  </p>
-                  <div className="space-y-2 text-sm">
-                    <div className="flex justify-between p-2 rounded bg-muted/50">
-                      <span className="text-muted-foreground">Recommended Sleep</span>
-                      <span className="font-semibold">8+ hours</span>
-                    </div>
-                    <div className="flex justify-between p-2 rounded bg-muted/50">
-                      <span className="text-muted-foreground">Active Recovery</span>
-                      <span className="font-semibold">Light walk</span>
-                    </div>
-                    <div className="flex justify-between p-2 rounded bg-muted/50">
-                      <span className="text-muted-foreground">Stress Level</span>
-                      <span className="font-semibold text-yellow-500">Elevated</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <AssignmentGrid />
-            </div>
-          </div>
-        )}
-      </main>
-
-      {/* Mode Indicator */}
-      <div className="fixed bottom-6 right-6">
-        <div className={`px-4 py-2 rounded-full ${getModeColor(viewMode)} text-white shadow-lg flex items-center gap-2`}>
-          {viewMode === "focus" && <LayoutGrid className="w-4 h-4" />}
-          {viewMode === "strategy" && <LineChart className="w-4 h-4" />}
-          {viewMode === "recovery" && <Heart className="w-4 h-4" />}
-          <span className="text-sm font-semibold capitalize">{viewMode} Mode</span>
+        {/* Footer: Profile & Biometrics */}
+        <div className="space-y-6">
+          <ProfileSection />
+          <HealthMetrics />
         </div>
-      </div>
+      </main>
 
       {/* Toast Notifications */}
       <Toaster />
 
-      {/* Nexus Chatbot */}
-      <NexusChatbot onScheduleChange={handleScheduleChange} />
+      {/* Hidden Nexus Chatbot (preserves all backend logic) */}
+      <NexusChatbot 
+        onScheduleChange={handleScheduleChange}
+        isHidden={true} // Hidden - using inline ChatInputCard instead
+      />
     </div>
   );
 }

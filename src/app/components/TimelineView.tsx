@@ -83,7 +83,15 @@ function DraggableEvent({ block, index, isLast, typeConfig }: { block: TimeBlock
       {/* Content - Draggable */}
       <div className="flex-1 pb-6" {...listeners} {...attributes} style={{ cursor: 'grab' }}>
         <div
-          className={`rounded-lg border p-3 ${
+          className={`rounded-lg border-l-4 border p-3 ${
+            block.type === "class" ? "border-l-blue-500" :
+            block.type === "meeting" ? "border-l-purple-500" :
+            block.type === "study" ? "border-l-indigo-500" :
+            block.type === "workout" ? "border-l-green-500" :
+            block.type === "networking" ? "border-l-orange-500" :
+            block.type === "recruiting" ? "border-l-red-500" :
+            "border-l-gray-400"
+          } ${
             block.status === "current" ? "border-blue-500 bg-blue-500/5" : ""
           } ${block.status === "completed" ? "opacity-50" : ""} ${
             block.status === "suggested" ? "border-green-500 border-dashed bg-green-500/5" : ""
@@ -310,7 +318,7 @@ function parseMcpEvent(event: CalendarEvent): TimeBlock | null {
 export function TimelineView() {
   const [timeBlocks, setTimeBlocks] = useState<TimeBlock[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [view, setView] = useState<"day" | "week" | "month">("week"); // Default to week view
+  const [view, setView] = useState<"day" | "week" | "month">("day"); // Default to day view
   // Set to current week (week starting from this Monday, using global "today")
   const [currentDate, setCurrentDate] = useState(() => {
     const today = getToday(); // Use global "today" (Jan 21, 2026)
