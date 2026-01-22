@@ -411,12 +411,12 @@ app.post('/mcp', async (req, res) => {
             const allItemsPromises = userCoursesForItems.map(async (course) => {
               try {
                 const [assignments, announcements, quizzes] = await Promise.all([
-                  // Assignments
-                  canvasRequest(`/courses/${course.id}/assignments?include[]=submission&per_page=50&order_by=due_at`).catch(() => []),
-                  // Announcements (discussion topics with is_announcement=true)
-                  canvasRequest(`/courses/${course.id}/discussion_topics?only_announcements=true&per_page=50`).catch(() => []),
-                  // Quizzes
-                  canvasRequest(`/courses/${course.id}/quizzes?per_page=50`).catch(() => [])
+                  // Assignments - increased limit to get more items
+                  canvasRequest(`/courses/${course.id}/assignments?include[]=submission&per_page=100&order_by=due_at`).catch(() => []),
+                  // Announcements (discussion topics with is_announcement=true) - increased limit
+                  canvasRequest(`/courses/${course.id}/discussion_topics?only_announcements=true&per_page=100`).catch(() => []),
+                  // Quizzes - increased limit
+                  canvasRequest(`/courses/${course.id}/quizzes?per_page=100`).catch(() => [])
                 ]);
                 
                 // Format assignments

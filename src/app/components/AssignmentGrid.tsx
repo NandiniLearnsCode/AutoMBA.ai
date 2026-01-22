@@ -258,86 +258,29 @@ export function AssignmentGrid() {
       const canvasItems = parseCanvasResponse(response);
       console.log(`✅ Found ${canvasItems.length} Canvas items in ${Date.now() - startTime}ms`);
       
-      // Debug: Log sample items
+      // Debug: Log sample items and counts
       if (canvasItems.length > 0) {
-        console.log('📋 Sample items:', canvasItems.slice(0, 3).map(i => ({
-          type: i.type,
-          name: i.name || i.title,
-          due_at: i.due_at,
-          posted_at: i.posted_at,
-          created_at: i.created_at
-        })));
-      }
-
-      // Filter to show current month and future months only (exclude past months)
-      const today = getToday();
-      const monthStart = startOfMonth(today);
-      monthStart.setHours(0, 0, 0, 0);
-      
-      console.log(`📅 Filtering items: monthStart = ${format(monthStart, 'yyyy-MM-dd')}, today = ${format(today, 'yyyy-MM-dd')}`);
-      
-      // Filter Canvas items by date - show current month and future only
-      const currentAndFutureItems = canvasItems.filter((canvasItem) => {
-        // Get the appropriate date field based on type
-        let itemDate: Date | null = null;
-        
-        if (canvasItem.type === 'announcement') {
-          if (canvasItem.posted_at) {
-            try {
-              itemDate = parseISO(canvasItem.posted_at);
-            } catch {
-              if (canvasItem.created_at) {
-                try {
-                  itemDate = parseISO(canvasItem.created_at);
-                } catch {}
-              }
-            }
-          }
-        } else {
-          // Assignment or quiz - use due_at
-          if (canvasItem.due_at) {
-            try {
-              itemDate = parseISO(canvasItem.due_at);
-            } catch {}
-          }
-        }
-        
-        if (!itemDate) {
-          // Include items without dates (they might be upcoming)
-          console.log(`✅ Including item without date: ${canvasItem.name || canvasItem.title} (${canvasItem.type})`);
-          return true;
-        }
-        
-        // Include if date is in current month or future
-        const isIncluded = itemDate >= monthStart;
-        if (!isIncluded) {
-          console.log(`❌ Excluding item: ${canvasItem.name || canvasItem.title} (${canvasItem.type}) - date: ${format(itemDate, 'yyyy-MM-dd')} < ${format(monthStart, 'yyyy-MM-dd')}`);
-        }
-        return isIncluded;
-      });
-      
-      const assignmentsCount = currentAndFutureItems.filter(i => i.type === 'assignment').length;
-      const announcementsCount = currentAndFutureItems.filter(i => i.type === 'announcement').length;
-      const quizzesCount = currentAndFutureItems.filter(i => i.type === 'quiz').length;
-      console.log(`📅 Filtered to ${assignmentsCount} assignments, ${announcementsCount} announcements, ${quizzesCount} quizzes (current & future months)`);
-      
-      // If no items after filtering, show all items (fallback to show something)
-      let itemsToConvert = currentAndFutureItems;
-      if (currentAndFutureItems.length === 0 && canvasItems.length > 0) {
-        console.warn('⚠️ No items passed date filter. Showing all items as fallback:');
-        console.log('All items:', canvasItems.map(i => ({
+        const assignmentsCount = canvasItems.filter(i => i.type === 'assignment').length;
+        const announcementsCount = canvasItems.filter(i => i.type === 'announcement').length;
+        const quizzesCount = canvasItems.filter(i => i.type === 'quiz').length;
+        console.log(`📊 Breakdown: ${assignmentsCount} assignments, ${announcementsCount} announcements, ${quizzesCount} quizzes`);
+        console.log('📋 Sample items:', canvasItems.slice(0, 5).map(i => ({
           type: i.type,
           name: i.name || i.title,
           due_at: i.due_at,
           posted_at: i.posted_at,
           created_at: i.created_at,
-          date: i.due_at || i.posted_at || i.created_at
+          course: i.course_name || i.course_code
         })));
-        itemsToConvert = canvasItems; // Show all items if filtering results in zero
+      } else {
+        console.warn('⚠️ No Canvas items found. Check server logs and Canvas API connection.');
       }
 
+      // Show ALL items - no date filtering (user requested to see everything)
+      console.log(`📋 Showing ALL ${canvasItems.length} items (no date filtering)`);
+
       // Convert to our format and filter out nulls
-      const converted = itemsToConvert
+      const converted = canvasItems
         .map(convertCanvasItem)
         .filter((a): a is CourseItem => a !== null);
 
@@ -357,13 +300,15 @@ export function AssignmentGrid() {
       if (converted.length === 0) {
         if (canvasItems.length === 0) {
           console.warn(`⚠️ No Canvas items found at all. Check if you have assignments, announcements, or quizzes in Canvas.`);
-        } else if (currentAndFutureItems.length === 0 && itemsToConvert === currentAndFutureItems) {
-          console.warn(`⚠️ ${canvasItems.length} items found, but none are in current/future months. Showing all items as fallback.`);
         } else {
-          console.warn(`⚠️ ${itemsToConvert.length} items to convert, but ${converted.length} were converted successfully. Check conversion logic.`);
+          console.warn(`⚠️ ${canvasItems.length} items found, but ${converted.length} were converted successfully. Check conversion logic.`);
+          console.log('Items that failed conversion:', canvasItems.filter((item, idx) => {
+            const converted = convertCanvasItem(item);
+            return converted === null;
+          }).slice(0, 5));
         }
       } else {
-        console.log(`✅ Successfully displaying ${converted.length} course items`);
+        console.log(`✅ Successfully displaying ${converted.length} course items (out of ${canvasItems.length} total)`);
       }
     } catch (error: any) {
       console.error('❌ Error fetching Canvas items:', error);
@@ -426,7 +371,7 @@ export function AssignmentGrid() {
       <div className="flex items-center justify-between mb-4">
         <div>
           <h3 className="font-semibold">Canvas Course Items</h3>
-          <p className="text-xs text-muted-foreground mt-0.5">Current & Future Months</p>
+          <p className="text-xs text-muted-foreground mt-0.5">All Items</p>
         </div>
         <div className="flex items-center gap-2">
           {loadingAssignments && (
@@ -474,9 +419,9 @@ export function AssignmentGrid() {
         )}
         {items.length === 0 && !loadingAssignments && hasTriedFetch && !connectionError && (
           <div className="text-center py-8 text-sm text-muted-foreground">
-            <p>No course items found for current and future months.</p>
+            <p>No course items found.</p>
             <p className="text-xs mt-1">Make sure Canvas is connected and you have assignments, announcements, or quizzes.</p>
-            <p className="text-xs mt-1">Check browser console (F12) for details.</p>
+            <p className="text-xs mt-1">Check browser console (F12) and server logs for details.</p>
           </div>
         )}
         {items.length === 0 && !hasTriedFetch && !loadingAssignments && (
