@@ -295,11 +295,19 @@ app.post('/mcp', async (req, res) => {
                 const courseAssignments = await canvasRequest(
                   `/courses/${course.id}/assignments?include[]=submission&per_page=50&order_by=due_at`
                 );
-                // Add course info to each assignment
+                // Extract only needed fields to reduce payload size (significant performance boost!)
                 return courseAssignments.map(a => ({
-                  ...a,
+                  id: a.id,
+                  name: a.name,
+                  due_at: a.due_at,
+                  course_id: a.course_id,
                   course_name: course.name,
                   course_code: course.course_code,
+                  submission: a.submission ? {
+                    workflow_state: a.submission.workflow_state,
+                    submitted_at: a.submission.submitted_at,
+                    body: a.submission.body,
+                  } : null,
                 }));
               } catch (error) {
                 console.warn(`⚠️ Failed to fetch assignments for course ${course.id} (${course.name}):`, error.message);
@@ -314,11 +322,12 @@ app.post('/mcp', async (req, res) => {
             const duration = Date.now() - startTime;
             console.log(`✅ Fetched ${allAssignments.length} total assignments from ${userCourses.length} courses in ${duration}ms`);
             
+            // Use compact JSON (no pretty printing) for faster serialization
             result = {
               content: [
                 {
                   type: 'text',
-                  text: JSON.stringify(allAssignments, null, 2)
+                  text: JSON.stringify(allAssignments)
                 }
               ]
             };

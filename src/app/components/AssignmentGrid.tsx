@@ -4,7 +4,7 @@ import { Badge } from "@/app/components/ui/badge";
 import { Progress } from "@/app/components/ui/progress";
 import { Button } from "@/app/components/ui/button";
 import { ScheduleAssignmentDialog } from "./ScheduleAssignmentDialog";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useMcpServer } from "@/hooks/useMcpServer";
 import { format, parseISO, isPast, isToday, addDays } from "date-fns";
 
@@ -135,6 +135,46 @@ function convertCanvasAssignment(canvasAssignment: any): Assignment | null {
   }
 }
 
+// Simplified response parser - optimized for performance
+function parseCanvasResponse(response: any): any[] {
+  // Fast path: response is already an array of assignments
+  if (Array.isArray(response)) {
+    const firstItem = response[0];
+    // Check if it's an array of assignments (has id or name) or content items
+    if (firstItem && typeof firstItem === 'object') {
+      if ('id' in firstItem || 'name' in firstItem) {
+        return response; // Direct array of assignments
+      }
+      // It's content items, find text content
+      const textContent = response.find((item: any) => item.type === 'text');
+      if (textContent?.text) {
+        try {
+          const parsed = JSON.parse(textContent.text);
+          return Array.isArray(parsed) ? parsed : [parsed];
+        } catch {
+          return [];
+        }
+      }
+    }
+    return [];
+  }
+  
+  // Handle object with content array
+  if (response?.content && Array.isArray(response.content)) {
+    const textContent = response.content.find((item: any) => item.type === 'text');
+    if (textContent?.text) {
+      try {
+        const parsed = JSON.parse(textContent.text);
+        return Array.isArray(parsed) ? parsed : [parsed];
+      } catch {
+        return [];
+      }
+    }
+  }
+  
+  return [];
+}
+
 export function AssignmentGrid() {
   const { connected, callTool, connect, loading, error: connectionError } = useMcpServer('canvas');
   const [assignments, setAssignments] = useState<Assignment[]>([]);
@@ -142,158 +182,92 @@ export function AssignmentGrid() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [loadingAssignments, setLoadingAssignments] = useState(false);
   const [hasTriedFetch, setHasTriedFetch] = useState(false);
+  
+  // Use refs to prevent duplicate fetches and track fetch status
+  const fetchingRef = useRef(false);
+  const lastFetchTimeRef = useRef<number>(0);
+  const assignmentsCountRef = useRef<number>(0);
+  const CACHE_DURATION = 30000; // Cache for 30 seconds
 
-  // Fetch Canvas assignments
-  useEffect(() => {
-    let isMounted = true;
-    
-    const fetchAssignments = async () => {
-      // Try to connect if not connected
-      if (!connected && !loading) {
-        console.log('Canvas not connected, attempting to connect...');
+  // Memoized fetch function
+  const fetchAssignments = useCallback(async (force = false) => {
+    // Prevent duplicate simultaneous fetches
+    if (fetchingRef.current) {
+      return;
+    }
+
+    // Check cache (unless forced refresh)
+    const now = Date.now();
+    if (!force && assignmentsCountRef.current > 0 && (now - lastFetchTimeRef.current) < CACHE_DURATION) {
+      return;
+    }
+
+    // Only fetch if connected
+    if (!connected) {
+      // Try to connect if not connected and not loading
+      if (!loading) {
         try {
           await connect();
-          // Wait a bit for connection to establish
-          await new Promise(resolve => setTimeout(resolve, 500));
-          if (!isMounted) return;
-          // Will retry on next render when connected becomes true
+          // Connection will trigger useEffect to fetch
           return;
         } catch (err) {
           console.error('Failed to connect to Canvas:', err);
-          if (isMounted) setHasTriedFetch(true);
+          setHasTriedFetch(true);
           return;
         }
       }
+      return;
+    }
 
-      // Only fetch if connected
-      if (!connected) {
-        return;
+    fetchingRef.current = true;
+    setLoadingAssignments(true);
+    setHasTriedFetch(true);
+
+    try {
+      const startTime = Date.now();
+      console.log('🚀 Fetching Canvas assignments...');
+      
+      const response = await callTool('list_user_assignments', {});
+      
+      // Parse response (optimized)
+      const canvasAssignments = parseCanvasResponse(response);
+      console.log(`✅ Found ${canvasAssignments.length} Canvas assignments in ${Date.now() - startTime}ms`);
+
+      // Convert to our format and filter out nulls
+      const converted = canvasAssignments
+        .map(convertCanvasAssignment)
+        .filter((a): a is Assignment => a !== null);
+
+      // Sort by priority and due date
+      converted.sort((a, b) => {
+        const priorityOrder = { high: 0, medium: 1, low: 2 };
+        const priorityDiff = priorityOrder[a.priority] - priorityOrder[b.priority];
+        return priorityDiff !== 0 ? priorityDiff : a.title.localeCompare(b.title);
+      });
+
+      setAssignments(converted);
+      assignmentsCountRef.current = converted.length;
+      lastFetchTimeRef.current = Date.now();
+      
+      if (converted.length === 0 && canvasAssignments.length === 0) {
+        console.warn('⚠️ No Canvas assignments found.');
       }
+    } catch (error: any) {
+      console.error('❌ Error fetching Canvas assignments:', error);
+      setAssignments([]);
+      assignmentsCountRef.current = 0;
+    } finally {
+      setLoadingAssignments(false);
+      fetchingRef.current = false;
+    }
+  }, [connected, loading, callTool, connect]);
 
-      // Prevent multiple simultaneous fetches
-      if (loadingAssignments) {
-        return;
-      }
-
-      try {
-        if (isMounted) {
-          setLoadingAssignments(true);
-          setHasTriedFetch(true);
-        }
-        console.log('Fetching Canvas assignments...');
-        
-        const response = await callTool('list_user_assignments', {});
-        
-        if (!isMounted) return;
-        
-        console.log('Canvas API response:', response);
-        console.log('Response type:', typeof response);
-        console.log('Is array:', Array.isArray(response));
-        
-        // Parse the response - MCP SDK returns content array directly
-        let canvasAssignments: any[] = [];
-        
-        if (Array.isArray(response)) {
-          // MCP SDK returns array of content items: [{ type: 'text', text: '...' }]
-          const textContent = response.find((item: any) => item.type === 'text');
-          if (textContent?.text) {
-            try {
-              const parsed = JSON.parse(textContent.text);
-              // Canvas API returns an array of assignments
-              canvasAssignments = Array.isArray(parsed) ? parsed : [parsed];
-              console.log(`✅ Found ${canvasAssignments.length} Canvas assignments`);
-            } catch (e) {
-              console.error('❌ Error parsing Canvas assignments JSON:', e);
-              console.error('Raw text:', textContent.text?.substring(0, 200));
-            }
-          } else if (response.length > 0) {
-            // Check if response is already an array of assignments
-            const firstItem = response[0];
-            if (typeof firstItem === 'object' && ('id' in firstItem || 'name' in firstItem)) {
-              canvasAssignments = response;
-              console.log(`✅ Found ${canvasAssignments.length} Canvas assignments (direct array)`);
-            } else {
-              console.warn('Unexpected response format:', response);
-            }
-          } else {
-            console.warn('Empty response array from Canvas');
-          }
-        } else if (response && typeof response === 'object') {
-          // Handle case where response is a single object
-          if (response.content && Array.isArray(response.content)) {
-            const textContent = response.content.find((item: any) => item.type === 'text');
-            if (textContent?.text) {
-              try {
-                const parsed = JSON.parse(textContent.text);
-                canvasAssignments = Array.isArray(parsed) ? parsed : [parsed];
-                console.log(`✅ Found ${canvasAssignments.length} Canvas assignments (from content)`);
-              } catch (e) {
-                console.error('❌ Error parsing Canvas assignments from content:', e);
-              }
-            }
-          } else if (Array.isArray(response)) {
-            // Response is already an array
-            canvasAssignments = response;
-            console.log(`✅ Found ${canvasAssignments.length} Canvas assignments (response is array)`);
-          } else {
-            console.warn('Unexpected response format:', response);
-          }
-        } else {
-          console.warn('Unexpected response type:', typeof response, response);
-        }
-
-        // Convert to our format and filter out nulls
-        const converted = canvasAssignments
-          .map(convertCanvasAssignment)
-          .filter((a): a is Assignment => a !== null);
-
-        console.log(`✅ Converted ${converted.length} assignments to display format`);
-
-        // Sort by priority and due date
-        converted.sort((a, b) => {
-          const priorityOrder = { high: 0, medium: 1, low: 2 };
-          const priorityDiff = priorityOrder[a.priority] - priorityOrder[b.priority];
-          if (priorityDiff !== 0) return priorityDiff;
-          
-          // If same priority, sort alphabetically by title
-          return a.title.localeCompare(b.title);
-        });
-
-        // Always update assignments, even if empty
-        if (isMounted) {
-          console.log('📝 Setting assignments:', converted.length > 0 ? `${converted.length} assignments` : 'empty array');
-          setAssignments(converted);
-          
-          if (converted.length === 0 && canvasAssignments.length === 0) {
-            console.warn('⚠️ No Canvas assignments found. Check if you have assignments in Canvas.');
-          }
-        }
-      } catch (error: any) {
-        if (!isMounted) return;
-        console.error('❌ Error fetching Canvas assignments:', error);
-        console.error('Error details:', {
-          message: error.message,
-          stack: error.stack,
-          name: error.name
-        });
-        // Set empty array on error (don't show defaults)
-        setAssignments([]);
-      } finally {
-        if (isMounted) {
-          setLoadingAssignments(false);
-        }
-      }
-    };
-
-    // Only fetch if we haven't tried yet or if connection status changed
-    if (connected || (!hasTriedFetch && !loading)) {
+  // Fetch assignments when connected
+  useEffect(() => {
+    if (connected && !hasTriedFetch) {
       fetchAssignments();
     }
-    
-    return () => {
-      isMounted = false;
-    };
-  }, [connected, loading, hasTriedFetch, callTool, connect]); // Include callTool and connect - they're memoized
+  }, [connected, hasTriedFetch, fetchAssignments]);
 
   const priorityColors = {
     high: "border-red-500/50 bg-red-500/5",
@@ -306,50 +280,9 @@ export function AssignmentGrid() {
     setDialogOpen(true);
   };
 
-  const handleRefresh = async () => {
-    setHasTriedFetch(false);
-    if (connected) {
-      // Force re-fetch
-      const fetchAssignments = async () => {
-        try {
-          setLoadingAssignments(true);
-          const response = await callTool('list_user_assignments', {});
-          
-          let canvasAssignments: any[] = [];
-          if (Array.isArray(response)) {
-            const textContent = response.find((item: any) => item.type === 'text');
-            if (textContent?.text) {
-              try {
-                const parsed = JSON.parse(textContent.text);
-                canvasAssignments = Array.isArray(parsed) ? parsed : [parsed];
-              } catch (e) {
-                console.error('Error parsing:', e);
-              }
-            }
-          }
-          
-          const converted = canvasAssignments
-            .map(convertCanvasAssignment)
-            .filter((a): a is Assignment => a !== null);
-          
-          converted.sort((a, b) => {
-            const priorityOrder = { high: 0, medium: 1, low: 2 };
-            const priorityDiff = priorityOrder[a.priority] - priorityOrder[b.priority];
-            return priorityDiff !== 0 ? priorityDiff : a.title.localeCompare(b.title);
-          });
-          
-          setAssignments(converted);
-        } catch (error) {
-          console.error('Error refreshing:', error);
-        } finally {
-          setLoadingAssignments(false);
-        }
-      };
-      await fetchAssignments();
-    } else {
-      await connect();
-    }
-  };
+  const handleRefresh = useCallback(async () => {
+    await fetchAssignments(true); // Force refresh
+  }, [fetchAssignments]);
 
   return (
     <Card className="p-4">
