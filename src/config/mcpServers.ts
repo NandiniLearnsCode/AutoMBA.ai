@@ -55,13 +55,18 @@ export function getMcpServerConfigs(): McpServerConfig[] {
   });
 
   // Canvas MCP Server
-  // Placeholder for future Canvas LMS MCP integration
+  // Uses local backend proxy server (runs on port 3001)
+  // Requires backend server to be running: npm run dev:canvas
+  const canvasServerUrl = import.meta.env.VITE_CANVAS_MCP_URL || 
+    (typeof window !== 'undefined' 
+      ? `${window.location.origin}/api/mcp-canvas/mcp`
+      : 'http://localhost:5173/api/mcp-canvas/mcp');
   servers.push({
     name: 'canvas',
-    url: '', // Will be set up when Canvas MCP is available
+    url: canvasServerUrl,
     headers: {},
-    enabled: false,
-    description: 'Canvas LMS - Coming soon',
+    enabled: true,
+    description: 'Canvas LMS MCP - Requires backend server running on port 3001',
   });
 
   return servers.filter((s) => s.enabled || s.url); // Only return servers with URLs or enabled

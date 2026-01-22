@@ -4,7 +4,9 @@ import { Badge } from "@/app/components/ui/badge";
 import { Progress } from "@/app/components/ui/progress";
 import { Button } from "@/app/components/ui/button";
 import { ScheduleAssignmentDialog } from "./ScheduleAssignmentDialog";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useMcpServer } from "@/hooks/useMcpServer";
+import { format, parseISO, isPast, isToday, addDays } from "date-fns";
 
 interface Assignment {
   id: string;
@@ -17,7 +19,8 @@ interface Assignment {
   status: "not-started" | "in-progress" | "completed";
 }
 
-const assignments: Assignment[] = [
+// Default assignments (fallback)
+const defaultAssignments: Assignment[] = [
   {
     id: "1",
     title: "Valuation Case Study",
@@ -38,41 +41,142 @@ const assignments: Assignment[] = [
     estimatedTime: "Completed",
     status: "completed",
   },
-  {
-    id: "3",
-    title: "Marketing Mix Analysis",
-    course: "Marketing Analytics",
-    dueDate: "Jan 24, 5:00 PM",
-    priority: "medium",
-    progress: 60,
-    estimatedTime: "2h remaining",
-    status: "in-progress",
-  },
-  {
-    id: "4",
-    title: "Ethics Discussion Post",
-    course: "Business Ethics",
-    dueDate: "Jan 25, 11:59 PM",
-    priority: "low",
-    progress: 0,
-    estimatedTime: "30min estimated",
-    status: "not-started",
-  },
-  {
-    id: "5",
-    title: "Operations Group Project",
-    course: "Operations Management",
-    dueDate: "Jan 23, 9:00 AM",
-    priority: "high",
-    progress: 20,
-    estimatedTime: "6h remaining",
-    status: "in-progress",
-  },
 ];
 
+// Convert Canvas assignment to our format
+function convertCanvasAssignment(canvasAssignment: any): Assignment | null {
+  try {
+    const dueDate = canvasAssignment.due_at ? parseISO(canvasAssignment.due_at) : null;
+    const submission = canvasAssignment.submission;
+    
+    // Determine status
+    let status: "not-started" | "in-progress" | "completed" = "not-started";
+    let progress = 0;
+    
+    if (submission) {
+      if (submission.workflow_state === 'submitted' || submission.workflow_state === 'graded') {
+        status = "completed";
+        progress = 100;
+      } else if (submission.workflow_state === 'unsubmitted' && submission.submitted_at) {
+        status = "in-progress";
+        progress = 50; // Estimate
+      }
+    }
+    
+    // Calculate priority based on due date
+    let priority: "high" | "medium" | "low" = "low";
+    if (dueDate) {
+      const now = new Date();
+      const hoursUntilDue = (dueDate.getTime() - now.getTime()) / (1000 * 60 * 60);
+      if (hoursUntilDue < 24) priority = "high";
+      else if (hoursUntilDue < 72) priority = "medium";
+    }
+    
+    // Format due date
+    let dueDateStr = "No due date";
+    if (dueDate) {
+      if (isPast(dueDate) && !isToday(dueDate)) {
+        dueDateStr = format(dueDate, "MMM d, h:mm a") + " (Past due)";
+      } else if (isToday(dueDate)) {
+        dueDateStr = `Today, ${format(dueDate, "h:mm a")}`;
+      } else {
+        dueDateStr = format(dueDate, "MMM d, h:mm a");
+      }
+    }
+    
+    // Estimate time remaining
+    let estimatedTime = "Time TBD";
+    if (dueDate && !isPast(dueDate)) {
+      const hoursRemaining = (dueDate.getTime() - new Date().getTime()) / (1000 * 60 * 60);
+      if (hoursRemaining < 1) {
+        estimatedTime = `${Math.round(hoursRemaining * 60)}min remaining`;
+      } else if (hoursRemaining < 24) {
+        estimatedTime = `${Math.round(hoursRemaining)}h remaining`;
+      } else {
+        estimatedTime = `${Math.round(hoursRemaining / 24)} days remaining`;
+      }
+    } else if (status === "completed") {
+      estimatedTime = "Completed";
+    }
+    
+    return {
+      id: canvasAssignment.id.toString(),
+      title: canvasAssignment.name || "Untitled Assignment",
+      course: canvasAssignment.course_name || canvasAssignment.course_code || "Unknown Course",
+      dueDate: dueDateStr,
+      priority,
+      progress,
+      estimatedTime,
+      status,
+    };
+  } catch (error) {
+    console.error('Error converting Canvas assignment:', error);
+    return null;
+  }
+}
+
 export function AssignmentGrid() {
+  const { connected, callTool, connect, loading } = useMcpServer('canvas');
+  const [assignments, setAssignments] = useState<Assignment[]>(defaultAssignments);
   const [selectedAssignment, setSelectedAssignment] = useState<Assignment | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [loadingAssignments, setLoadingAssignments] = useState(false);
+
+  // Fetch Canvas assignments
+  useEffect(() => {
+    const fetchAssignments = async () => {
+      if (!connected) {
+        await connect();
+        return;
+      }
+
+      try {
+        setLoadingAssignments(true);
+        const response = await callTool('list_user_assignments', {});
+        
+        // Parse the response
+        let canvasAssignments: any[] = [];
+        if (Array.isArray(response)) {
+          const textContent = response.find((item: any) => item.type === 'text');
+          if (textContent?.text) {
+            try {
+              canvasAssignments = JSON.parse(textContent.text);
+            } catch (e) {
+              console.error('Error parsing Canvas assignments:', e);
+            }
+          } else if (response.length > 0 && typeof response[0] === 'object' && 'id' in response[0]) {
+            canvasAssignments = response;
+          }
+        }
+
+        // Convert to our format and filter out nulls
+        const converted = canvasAssignments
+          .map(convertCanvasAssignment)
+          .filter((a): a is Assignment => a !== null)
+          .sort((a, b) => {
+            // Sort by priority and due date
+            const priorityOrder = { high: 0, medium: 1, low: 2 };
+            const priorityDiff = priorityOrder[a.priority] - priorityOrder[b.priority];
+            if (priorityDiff !== 0) return priorityDiff;
+            // If same priority, sort by due date (earlier first)
+            return 0; // Could add date sorting here if needed
+          });
+
+        if (converted.length > 0) {
+          setAssignments(converted);
+        }
+      } catch (error) {
+        console.error('Error fetching Canvas assignments:', error);
+        // Keep default assignments on error
+      } finally {
+        setLoadingAssignments(false);
+      }
+    };
+
+    if (connected) {
+      fetchAssignments();
+    }
+  }, [connected, callTool, connect]);
 
   const priorityColors = {
     high: "border-red-500/50 bg-red-500/5",
@@ -89,9 +193,14 @@ export function AssignmentGrid() {
     <Card className="p-4">
       <div className="flex items-center justify-between mb-4">
         <h3 className="font-semibold">Canvas Assignments</h3>
-        <Badge variant="outline" className="text-xs">
-          {assignments.filter((a) => a.status !== "completed").length} Active
-        </Badge>
+        <div className="flex items-center gap-2">
+          {loadingAssignments && (
+            <Badge variant="outline" className="text-xs">Loading...</Badge>
+          )}
+          <Badge variant="outline" className="text-xs">
+            {assignments.filter((a) => a.status !== "completed").length} Active
+          </Badge>
+        </div>
       </div>
 
       <div className="space-y-3">

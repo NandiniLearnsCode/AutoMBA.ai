@@ -24,6 +24,11 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/mcp-calendar/, ''),
       },
+      '/api/mcp-canvas': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/mcp-canvas/, ''),
+      },
     },
   },
 })

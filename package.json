@@ -7,7 +7,8 @@
     "build": "vite build",
     "dev": "vite",
     "dev:server": "node server/mcp-calendar-server.js",
-    "dev:all": "concurrently \"npm run dev:server\" \"npm run dev\""
+    "dev:canvas": "node server/mcp-canvas-server.js",
+    "dev:all": "concurrently \"npm run dev:server\" \"npm run dev:canvas\" \"npm run dev\""
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
