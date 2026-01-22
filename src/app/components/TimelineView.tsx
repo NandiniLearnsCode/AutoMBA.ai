@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { Clock, Users, BookOpen, Dumbbell, Coffee, Briefcase, GraduationCap, RefreshCw, ChevronLeft, ChevronRight, Calendar as CalendarIcon } from "lucide-react";
 import { Card } from "@/app/components/ui/card";
-import { Badge } from "@/app/components/ui/badge";
 import { Button } from "@/app/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/app/components/ui/toggle-group";
 import { useMcpServer } from "@/hooks/useMcpServer";
@@ -99,12 +98,6 @@ function DraggableEvent({ block, index, isLast, typeConfig }: { block: TimeBlock
         >
           <div className="flex items-start justify-between gap-2 mb-1">
             <h4 className="font-semibold text-sm">{block.title}</h4>
-            <Badge
-              variant={block.priority === "hard-block" ? "default" : "outline"}
-              className="text-xs shrink-0"
-            >
-              {block.priority === "hard-block" ? "Critical" : block.priority}
-            </Badge>
           </div>
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
             <span>{block.duration} min</span>
