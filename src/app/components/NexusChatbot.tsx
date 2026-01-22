@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { MessageSquare, Send, X, Brain, Check, Clock, Calendar, Sparkles } from "lucide-react";
 import { Button } from "@/app/components/ui/button";
 import { Card } from "@/app/components/ui/card";
@@ -6,6 +6,38 @@ import { Input } from "@/app/components/ui/input";
 import { Badge } from "@/app/components/ui/badge";
 import { ScrollArea } from "@/app/components/ui/scroll-area";
 import { motion, AnimatePresence } from "motion/react";
+import { getOpenAIApiKey } from "@/config/apiKey";
+import { useMcpServer } from "@/hooks/useMcpServer";
+import { format, startOfWeek, endOfWeek, addDays, addWeeks, addMonths, startOfDay, endOfDay, startOfMonth, endOfMonth } from "date-fns";
+import { getToday } from "@/utils/dateUtils";
+
+// ParsedEvent type (matching the format from googleCalendar.ts)
+interface ParsedEvent {
+  id: string;
+  time: string;
+  duration: number;
+  title: string;
+  type: "class" | "meeting" | "study" | "workout" | "networking" | "recruiting" | "buffer";
+  status: "completed" | "current" | "upcoming" | "suggested";
+  location?: string;
+  priority: "hard-block" | "flexible" | "optional";
+}
+
+// Google Calendar event structure from MCP server
+interface CalendarEvent {
+  id: string;
+  summary?: string;
+  start: {
+    dateTime?: string;
+    date?: string;
+  };
+  end: {
+    dateTime?: string;
+    date?: string;
+  };
+  location?: string;
+  description?: string;
+}
 
 interface Message {
   id: string;
@@ -16,6 +48,7 @@ interface Message {
     type: "move" | "cancel" | "add" | "suggest";
     details: string;
     status: "pending" | "approved" | "rejected";
+    userRequest?: string; // Store the original user request for parsing
     onApprove?: () => void;
     onReject?: () => void;
   };
@@ -23,9 +56,11 @@ interface Message {
 
 interface NexusChatbotProps {
   onScheduleChange?: (action: string, details: any) => void;
+  onSendMessageFromExternal?: (message: string) => void;
+  isHidden?: boolean; // For inline chat mode
 }
 
-export function NexusChatbot({ onScheduleChange }: NexusChatbotProps) {
+export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHidden = false }: NexusChatbotProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -37,16 +72,278 @@ export function NexusChatbot({ onScheduleChange }: NexusChatbotProps) {
   ]);
   const [inputValue, setInputValue] = useState("");
   const [isTyping, setIsTyping] = useState(false);
+  const [calendarEvents, setCalendarEvents] = useState<ParsedEvent[]>([]); // Context-awareness: calendar events for relevant period
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  
+  // Use MCP server hook for Google Calendar
+  const { connected, loading: mcpLoading, error: mcpError, callTool, connect } = useMcpServer('google-calendar');
+
+  // Helper to parse MCP CalendarEvent to ParsedEvent format
+  const parseMcpEventToParsed = (event: CalendarEvent): ParsedEvent | null => {
+    try {
+      const startTime = event.start?.dateTime || event.start?.date;
+      if (!startTime) return null;
+      
+      const start = new Date(startTime);
+      const end = new Date(event.end?.dateTime || event.end?.date || startTime);
+      const duration = Math.round((end.getTime() - start.getTime()) / (1000 * 60)); // minutes
+      
+      const now = new Date();
+      let status: "completed" | "current" | "upcoming" | "suggested" = "upcoming";
+      if (end < now) {
+        status = "completed";
+      } else if (start <= now && end >= now) {
+        status = "current";
+      }
+      
+      // Determine event type from summary/title
+      const summary = event.summary || 'Untitled Event';
+      const lowerSummary = summary.toLowerCase();
+      let type: "class" | "meeting" | "study" | "workout" | "networking" | "recruiting" | "buffer" = "meeting";
+      
+      if (lowerSummary.includes('class') || lowerSummary.includes('course') || lowerSummary.includes('lecture')) {
+        type = "class";
+      } else if (lowerSummary.includes('study') || lowerSummary.includes('homework') || lowerSummary.includes('assignment')) {
+        type = "study";
+      } else if (lowerSummary.includes('gym') || lowerSummary.includes('workout') || lowerSummary.includes('exercise')) {
+        type = "workout";
+      } else if (lowerSummary.includes('coffee') || lowerSummary.includes('networking') || lowerSummary.includes('chat')) {
+        type = "networking";
+      } else if (lowerSummary.includes('recruiting') || lowerSummary.includes('interview') || lowerSummary.includes('info session')) {
+        type = "recruiting";
+      } else if (lowerSummary.includes('buffer') || lowerSummary.includes('travel')) {
+        type = "buffer";
+      }
+      
+      const timeStr = start.toLocaleTimeString('en-US', { 
+        hour: '2-digit', 
+        minute: '2-digit', 
+        hour12: false 
+      });
+      
+      return {
+        id: event.id,
+        time: timeStr,
+        duration,
+        title: summary,
+        type,
+        status,
+        location: event.location,
+        priority: "hard-block" as const,
+      };
+    } catch (error) {
+      console.error('Error parsing MCP event:', error);
+      return null;
+    }
+  };
+
+  // Helper to parse MCP response and convert to ParsedEvent array
+  const parseMcpEventsResponse = (response: any): ParsedEvent[] => {
+    try {
+      let events: CalendarEvent[] = [];
+      
+      if (!response) {
+        return [];
+      }
+      
+      if (Array.isArray(response)) {
+        // Response is an array of content items
+        const textContent = response.find((item: any) => item.type === 'text');
+        if (textContent?.text) {
+          try {
+            events = JSON.parse(textContent.text);
+          } catch (parseError) {
+            console.error('Error parsing JSON from text content:', parseError);
+            return [];
+          }
+        } else if (response.length > 0 && typeof response[0] === 'object' && 'id' in response[0]) {
+          // Response might be an array of events directly
+          events = response as CalendarEvent[];
+        } else {
+          console.warn('Unexpected response format:', response);
+          return [];
+        }
+      } else if (typeof response === 'string') {
+        // Response is a JSON string
+        try {
+          events = JSON.parse(response);
+        } catch (parseError) {
+          console.error('Error parsing JSON string:', parseError);
+          return [];
+        }
+      } else {
+        console.warn('Unexpected response type:', typeof response, response);
+        return [];
+      }
+      
+      // Ensure events is an array
+      if (!Array.isArray(events)) {
+        console.warn('Parsed events is not an array:', events);
+        return [];
+      }
+      
+      return events
+        .map(parseMcpEventToParsed)
+        .filter((event): event is ParsedEvent => event !== null);
+    } catch (error) {
+      console.error('Error in parseMcpEventsResponse:', error);
+      return [];
+    }
+  };
+
+  // Parse date references from user input (tomorrow, next week, Monday, etc.)
+  const parseDateFromInput = (userInput: string): { startDate: Date; endDate: Date } => {
+    const lower = userInput.toLowerCase();
+    const today = getToday(); // Use global "today" (Jan 21, 2026)
+    let targetDate = new Date(today);
+    
+    // Check for specific date references
+    if (lower.includes('tomorrow')) {
+      targetDate = addDays(today, 1);
+    } else if (lower.includes('next week')) {
+      targetDate = addWeeks(startOfWeek(today, { weekStartsOn: 1 }), 1);
+    } else if (lower.includes('this week')) {
+      targetDate = startOfWeek(today, { weekStartsOn: 1 });
+    } else if (lower.includes('next month')) {
+      targetDate = addMonths(today, 1);
+    } else {
+      // Check for day names (Monday, Tuesday, etc.)
+      const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+      for (let i = 0; i < dayNames.length; i++) {
+        if (lower.includes(dayNames[i])) {
+          const targetDay = i;
+          const currentDay = today.getDay();
+          let daysUntilTarget = (targetDay - currentDay + 7) % 7;
+          if (daysUntilTarget === 0) daysUntilTarget = 7; // If today, get next week's occurrence
+          targetDate = addDays(today, daysUntilTarget);
+          break;
+        }
+      }
+    }
+    
+    // Default to current week for broader context
+    if (targetDate.getTime() === today.getTime()) {
+      return {
+        startDate: startOfWeek(today, { weekStartsOn: 1 }),
+        endDate: endOfWeek(today, { weekStartsOn: 1 }),
+      };
+    }
+    
+    // Return date range for the target date
+    return {
+      startDate: startOfDay(targetDate),
+      endDate: endOfDay(targetDate),
+    };
+  };
+
+  // Load calendar events for context-awareness (loads current week by default)
+  const loadCalendarEvents = useCallback(async (dateRange?: { startDate: Date; endDate: Date }): Promise<ParsedEvent[]> => {
+    if (!connected) {
+      await connect();
+      return []; // Return empty array if not connected
+    }
+    
+    try {
+      // Default to current week if no date range specified (using global "today")
+      const today = getToday(); // Use global "today" (Jan 21, 2026)
+      const startDate = dateRange?.startDate || startOfWeek(today, { weekStartsOn: 1 });
+      const endDate = dateRange?.endDate || endOfWeek(today, { weekStartsOn: 1 });
+      
+      startDate.setHours(0, 0, 0, 0);
+      endDate.setHours(23, 59, 59, 999);
+      
+      const response = await callTool('list_events', {
+        calendarId: 'primary',
+        timeMin: startDate.toISOString(),
+        timeMax: endDate.toISOString(),
+        maxResults: 500, // Increased for week/month views
+      });
+      
+      const parsedEvents = parseMcpEventsResponse(response);
+      setCalendarEvents(parsedEvents);
+      return parsedEvents || []; // Return events, ensure it's an array
+    } catch (error) {
+      console.error('Error loading calendar events:', error);
+      setCalendarEvents([]); // Set empty array on error
+      return []; // Return empty array if load fails
+    }
+  }, [connected, callTool, connect]);
+
+  // Load current week's events when component mounts and MCP is connected
+  useEffect(() => {
+    if (connected && !mcpLoading) {
+      loadCalendarEvents();
+    }
+  }, [connected, mcpLoading, loadCalendarEvents]);
+
+  // Connect to MCP on mount
+  useEffect(() => {
+    if (!connected && !mcpLoading) {
+      connect();
+    }
+  }, []);
+
+  // Generate initial suggestions based on calendar events
+  const generateInitialSuggestions = useCallback((events: ParsedEvent[]): string[] => {
+    const suggestions: string[] = [];
+    
+    if (events.length === 0) {
+      return ["I've loaded your calendar, but I don't see any events scheduled. Would you like me to help you plan your day?"];
+    }
+
+    // Check for tight schedules (events back-to-back)
+    const sortedEvents = [...events].sort((a, b) => {
+      const timeA = a.time.split(':').map(Number);
+      const timeB = b.time.split(':').map(Number);
+      return timeA[0] * 60 + timeA[1] - (timeB[0] * 60 + timeB[1]);
+    });
+
+    for (let i = 0; i < sortedEvents.length - 1; i++) {
+      const current = sortedEvents[i];
+      const next = sortedEvents[i + 1];
+      
+      const currentTime = current.time.split(':').map(Number);
+      const nextTime = next.time.split(':').map(Number);
+      const currentEnd = currentTime[0] * 60 + currentTime[1] + current.duration;
+      const nextStart = nextTime[0] * 60 + nextTime[1];
+      
+      if (currentEnd >= nextStart) {
+        const currentEndHour = Math.floor(currentEnd / 60);
+        const currentEndMin = currentEnd % 60;
+        const timeStr = `${currentEndHour.toString().padStart(2, '0')}:${currentEndMin.toString().padStart(2, '0')}`;
+        suggestions.push(
+          `I noticed a tight schedule: "${current.title}" ends at ${timeStr} and "${next.title}" starts immediately after. I recommend adding a 15-minute buffer between these events. Would you like me to reschedule "${next.title}" to start 15 minutes later?`
+        );
+        break; // Only suggest one at a time
+      }
+    }
+
+    // If no conflicts, suggest optimization
+    if (suggestions.length === 0 && events.length > 0) {
+      const todayEvents = events.filter(e => e.status === "upcoming" || e.status === "current");
+      if (todayEvents.length > 0) {
+        suggestions.push(
+          `I've analyzed your calendar for today. You have ${todayEvents.length} upcoming event${todayEvents.length > 1 ? 's' : ''}. Your schedule looks balanced! Is there anything specific you'd like me to optimize or adjust?`
+        );
+      }
+    }
+
+    return suggestions;
+  }, []);
 
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    // Use setTimeout to ensure DOM is updated
+    setTimeout(() => {
+      if (messagesEndRef.current) {
+        messagesEndRef.current.scrollIntoView({ behavior: "smooth", block: "end" });
+      }
+    }, 50);
   };
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages, isTyping]);
 
   useEffect(() => {
     if (isOpen && inputRef.current) {
@@ -54,172 +351,311 @@ export function NexusChatbot({ onScheduleChange }: NexusChatbotProps) {
     }
   }, [isOpen]);
 
-  const processUserRequest = (input: string): Message[] => {
-    const lowerInput = input.toLowerCase();
-    const responses: Message[] = [];
-
-    // User message
-    responses.push({
-      id: Date.now().toString(),
-      type: "user",
-      content: input,
-      timestamp: new Date(),
-    });
-
-    // Pattern matching for different requests
-    if (lowerInput.includes("move") || lowerInput.includes("reschedule")) {
-      // Extract what to move and when
-      let eventToMove = "event";
-      let newTime = "later";
-      
-      if (lowerInput.includes("gym")) eventToMove = "Gym Session";
-      if (lowerInput.includes("meeting")) eventToMove = "meeting";
-      if (lowerInput.includes("lunch")) eventToMove = "lunch";
-      if (lowerInput.includes("study")) eventToMove = "study session";
-      
-      if (lowerInput.match(/\d+\s*(pm|am)/)) {
-        const timeMatch = lowerInput.match(/(\d+)\s*(pm|am)/);
-        if (timeMatch) newTime = `${timeMatch[1]} ${timeMatch[2].toUpperCase()}`;
-      } else if (lowerInput.includes("tomorrow")) {
-        newTime = "tomorrow morning";
-      } else if (lowerInput.includes("afternoon")) {
-        newTime = "this afternoon";
-      }
-
-      responses.push({
-        id: (Date.now() + 1).toString(),
-        type: "action",
-        content: `I can move your ${eventToMove} to ${newTime}. This adjustment considers your current HRV levels and creates optimal spacing for cognitive recovery.`,
-        timestamp: new Date(),
-        action: {
-          type: "move",
-          details: `Move ${eventToMove} to ${newTime}`,
-          status: "pending",
-        },
-      });
-    } else if (lowerInput.includes("cancel") || lowerInput.includes("remove")) {
-      let eventToCancel = "optional events";
-      
-      if (lowerInput.includes("gym")) eventToCancel = "Gym Session";
-      if (lowerInput.includes("all")) eventToCancel = "all optional events";
-      if (lowerInput.includes("afternoon")) eventToCancel = "afternoon appointments";
-
-      responses.push({
-        id: (Date.now() + 1).toString(),
-        type: "action",
-        content: `I'll cancel ${eventToCancel}. This will free up time for recovery, which your biometrics indicate is needed.`,
-        timestamp: new Date(),
-        action: {
-          type: "cancel",
-          details: `Cancel ${eventToCancel}`,
-          status: "pending",
-        },
-      });
-    } else if (lowerInput.includes("add") || lowerInput.includes("schedule") || lowerInput.includes("block")) {
-      let duration = "2 hours";
-      let activity = "deep work";
-      
-      if (lowerInput.match(/\d+\s*hour/)) {
-        const match = lowerInput.match(/(\d+)\s*hour/);
-        if (match) duration = `${match[1]} hour${match[1] !== "1" ? "s" : ""}`;
-      }
-      
-      if (lowerInput.includes("study")) activity = "focused study";
-      if (lowerInput.includes("work")) activity = "deep work";
-      if (lowerInput.includes("case")) activity = "case study prep";
-      if (lowerInput.includes("network")) activity = "networking";
-
-      responses.push({
-        id: (Date.now() + 1).toString(),
-        type: "action",
-        content: `I recommend adding ${duration} of ${activity} tomorrow at 9:00 AM when your cognitive performance is typically highest. This aligns with your peak productivity windows.`,
-        timestamp: new Date(),
-        action: {
-          type: "add",
-          details: `Add ${duration} ${activity} block at 9:00 AM tomorrow`,
-          status: "pending",
-        },
-      });
-    } else if (lowerInput.includes("next") || lowerInput.includes("what's") || lowerInput.includes("when")) {
-      responses.push({
-        id: (Date.now() + 1).toString(),
-        type: "agent",
-        content: "Your next commitment is the Coffee Chat with Sarah Chen (McKinsey) at 10:15 AM at Starbucks. It's a hard-block event with 45 minutes allocated. After that, you have the Strategy Canvas Quiz at 11:00 AM.",
-        timestamp: new Date(),
-      });
-    } else if (lowerInput.includes("optimize") || lowerInput.includes("improve") || lowerInput.includes("suggest")) {
-      responses.push({
-        id: (Date.now() + 1).toString(),
-        type: "action",
-        content: "Based on your biometrics (5.2h sleep, elevated HRV), I recommend moving the Valuation Case Study to tomorrow morning when your cognitive function peaks. This will improve output quality by approximately 34% based on your historical patterns.",
-        timestamp: new Date(),
-        action: {
-          type: "suggest",
-          details: "Move Valuation Case Study to tomorrow 9:00 AM",
-          status: "pending",
-        },
-      });
-    } else if (lowerInput.includes("clear") || lowerInput.includes("free up")) {
-      let timeframe = "afternoon";
-      if (lowerInput.includes("morning")) timeframe = "morning";
-      if (lowerInput.includes("tomorrow")) timeframe = "tomorrow";
-
-      responses.push({
-        id: (Date.now() + 1).toString(),
-        type: "action",
-        content: `I can clear your ${timeframe} by moving 2 flexible events and canceling 1 optional buffer. This creates a 3-hour block for high-impact work. Shall I proceed?`,
-        timestamp: new Date(),
-        action: {
-          type: "move",
-          details: `Clear ${timeframe} schedule`,
-          status: "pending",
-        },
-      });
-    } else if (lowerInput.includes("health") || lowerInput.includes("recovery") || lowerInput.includes("biometric")) {
-      responses.push({
-        id: (Date.now() + 1).toString(),
-        type: "agent",
-        content: "Your current biometrics show: HRV at 42ms (low), 5.2 hours sleep (suboptimal), and stress levels elevated. I recommend scheduling active recovery this afternoon and targeting 8+ hours sleep tonight. Your next high-stakes event (Goldman Sachs Info Session) would benefit from better rest beforehand.",
-        timestamp: new Date(),
-      });
-    } else if (lowerInput.includes("conflict")) {
-      responses.push({
-        id: (Date.now() + 1).toString(),
-        type: "agent",
-        content: "I've detected 1 schedule conflict: Goldman Sachs Info Session overlaps with your gym session at 12:00 PM. Given your low HRV, I recommend moving the gym session to 1:00 PM for active recovery instead of intense training.",
-        timestamp: new Date(),
-      });
-    } else {
-      // Default response
-      responses.push({
-        id: (Date.now() + 1).toString(),
-        type: "agent",
-        content: "I can help you with:\n• Moving or rescheduling events\n• Canceling appointments\n• Adding study/work blocks\n• Optimizing based on biometrics\n• Resolving conflicts\n• Clearing time for deep work\n\nWhat would you like me to do?",
-        timestamp: new Date(),
-      });
+  const callOpenAI = async (
+    userMessage: string, 
+    conversationHistory: Array<{role: string, content: string}>,
+    calendarContext?: ParsedEvent[]
+  ): Promise<string> => {
+    const apiKey = getOpenAIApiKey();
+    if (!apiKey) {
+      throw new Error("OpenAI API key not found. Please set VITE_OPENAI_API_KEY environment variable.");
     }
 
-    return responses;
+    let calendarContextText = '';
+    if (calendarContext && calendarContext.length > 0) {
+      calendarContextText = `\n\nCurrent calendar events for the requested period:\n${calendarContext.map(e => 
+        `- ${e.title} (${e.time}, ${e.duration}min, ${e.type})`
+      ).join('\n')}\n\nUse this calendar information to make informed suggestions. Consider conflicts, priorities, and tradeoffs.`;
+    }
+
+    const systemPrompt = `You are the Nexus Executive Agent, an AI assistant helping MBA students optimize their schedule to maximize the Triple Bottom Line: Academic Excellence, Professional Networking, and Personal Well-being.
+
+Your role is to:
+- Help users optimize their schedule based on their stated priorities
+- Consider tradeoffs when making suggestions (e.g., moving a study session might affect academic performance, but could create space for networking)
+- Analyze calendar conflicts and suggest solutions
+- Provide specific, actionable suggestions (e.g., "I recommend moving [Event X] from [Time A] to [Time B] to accommodate [Priority Y]")
+- When suggesting actions, explain the reasoning and tradeoffs clearly
+- Be concise, professional, and action-oriented
+
+${calendarContextText}
+
+When suggesting actions (moving, canceling, adding events), format your response clearly so the user understands what action you're proposing and why it benefits their stated priorities.`;
+
+    try {
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [
+            { role: "system", content: systemPrompt },
+            ...conversationHistory,
+            { role: "user", content: userMessage },
+          ],
+          temperature: 0.7,
+          max_tokens: 500,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error?.message || `API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      return data.choices[0]?.message?.content || "I apologize, but I couldn't generate a response. Please try again.";
+    } catch (error) {
+      console.error("OpenAI API error:", error);
+      throw error;
+    }
   };
 
-  const handleSendMessage = () => {
-    if (!inputValue.trim()) return;
+  // Expose handleSendMessage for external use (inline chat mode)
+  const handleSendMessage = async (externalMessage?: string) => {
+    const messageToSend = externalMessage || inputValue.trim();
+    if (!messageToSend) return;
 
+    if (!externalMessage) {
+      setInputValue("");
+    }
     setIsTyping(true);
-    const newMessages = processUserRequest(inputValue);
-    
-    // Add user message immediately
-    setMessages((prev) => [...prev, newMessages[0]]);
-    setInputValue("");
 
-    // Simulate agent thinking time
-    setTimeout(() => {
-      setMessages((prev) => [...prev, ...newMessages.slice(1)]);
+    // Add user message immediately
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      type: "user",
+      content: messageToSend,
+      timestamp: new Date(),
+    };
+
+    // Use functional update to get the latest messages including the new user message
+    let currentMessages: Message[] = [];
+    setMessages((prev) => {
+      currentMessages = [...prev, userMessage];
+      return currentMessages;
+    });
+
+    try {
+      // Build conversation history from previous messages (excluding the new user message, as it will be added in callOpenAI)
+      // Include user, agent, and action messages (action messages are also part of the conversation)
+      const previousMessages = currentMessages.slice(0, -1); // Exclude the last message (the new user message)
+      const conversationHistory = previousMessages
+        .filter(msg => {
+          // Include user and agent messages
+          if (msg.type === "user" || msg.type === "agent") return true;
+          // Include action messages that have been resolved (approved/rejected)
+          if (msg.type === "action" && msg.action?.status !== "pending") return true;
+          return false;
+        })
+        .map(msg => {
+          // Convert action messages to assistant messages for the API
+          if (msg.type === "action" && msg.action?.status !== "pending") {
+            const statusText = msg.action.status === "approved" ? " (approved)" : " (declined)";
+            return {
+              role: "assistant" as const,
+              content: msg.content + statusText,
+            };
+          }
+          return {
+            role: (msg.type === "user" ? "user" : "assistant") as const,
+            content: msg.content,
+          };
+        });
+
+      // Parse date range from user input and load relevant events
+      const dateRange = parseDateFromInput(messageToSend);
+      
+      // Load events for the detected date range and use the returned events directly
+      const relevantEvents = await loadCalendarEvents(dateRange);
+      
+      // Ensure relevantEvents is an array (defensive programming)
+      const eventsArray = Array.isArray(relevantEvents) ? relevantEvents : [];
+
+      // Call OpenAI API with calendar context
+      const aiResponse = await callOpenAI(messageToSend, conversationHistory, eventsArray.length > 0 ? eventsArray : undefined);
+
+      // Parse response to determine if it's an action or regular message
+      // Only mark as action if it's clearly proposing a concrete, actionable change
+      // Look for patterns like "I can move...", "I'll cancel...", "Let me add...", "I recommend moving..."
+      const lowerResponse = aiResponse.toLowerCase();
+      let actionType: "move" | "cancel" | "add" | "suggest" | undefined;
+      let actionDetails = "";
+
+      // Enhanced intent parsing for scheduling keywords
+      const lowerInput = messageToSend.toLowerCase();
+      
+      // Check for specific scheduling intents
+      const hasScheduleIntent = /schedule|block time|study for/i.test(messageToSend);
+      const hasInsteadOfIntent = /instead of|replace/i.test(messageToSend);
+      
+      // More conservative detection - only mark as action if it's proposing a specific action
+      const actionPatterns = {
+        move: /(?:i can|i'll|let me|i recommend|i suggest).*(?:move|reschedule|shift)/,
+        cancel: /(?:i can|i'll|let me|i recommend|i suggest).*(?:cancel|remove|delete)/,
+        add: /(?:i can|i'll|let me|i recommend|i suggest|schedule|block time).*(?:add|schedule|block|create|study for)/,
+        suggest: /(?:i recommend|i suggest|you should).*(?:move|cancel|add|reschedule|optimize)/,
+      };
+      
+      // If user explicitly uses scheduling keywords, mark as "add" action
+      if (hasScheduleIntent && !hasInsteadOfIntent) {
+        actionType = "add";
+        actionDetails = "Schedule event";
+      }
+
+      if (actionPatterns.move.test(lowerResponse)) {
+        actionType = "move";
+        actionDetails = "Schedule adjustment";
+      } else if (actionPatterns.cancel.test(lowerResponse)) {
+        actionType = "cancel";
+        actionDetails = "Cancel event";
+      } else if (actionPatterns.add.test(lowerResponse)) {
+        actionType = "add";
+        actionDetails = "Add to schedule";
+      } else if (actionPatterns.suggest.test(lowerResponse)) {
+        actionType = "suggest";
+        actionDetails = "Optimization suggestion";
+      }
+
+      const agentMessage: Message = actionType
+        ? {
+            id: (Date.now() + 1).toString(),
+            type: "action",
+            content: aiResponse,
+            timestamp: new Date(),
+            action: {
+              type: actionType,
+              details: actionDetails,
+              status: "pending",
+              userRequest: messageToSend, // Store user's original request for parsing
+            },
+          }
+        : {
+            id: (Date.now() + 1).toString(),
+            type: "agent",
+            content: aiResponse,
+            timestamp: new Date(),
+          };
+
+      setMessages((prev) => [...prev, agentMessage]);
+    } catch (error) {
+      console.error("Error calling OpenAI:", error);
+      const errorMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        type: "agent",
+        content: error instanceof Error 
+          ? `I apologize, but I encountered an error: ${error.message}. Please check your API key configuration.`
+          : "I apologize, but I encountered an error. Please try again.",
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, errorMessage]);
+    } finally {
       setIsTyping(false);
-    }, 800);
+    }
   };
 
-  const handleApproveAction = (messageId: string) => {
+  // Helper to parse event details from user request
+  const parseEventDetails = (userRequest: string): { title: string; start: Date; end: Date } | null => {
+    const lower = userRequest.toLowerCase();
+    
+    // Extract time (e.g., "5 PM", "5:00 PM", "17:00")
+    const timeMatch = userRequest.match(/(\d{1,2}):?(\d{2})?\s*(AM|PM)?/i);
+    let hour = 12;
+    let minute = 0;
+    
+    if (timeMatch) {
+      hour = parseInt(timeMatch[1]);
+      minute = timeMatch[2] ? parseInt(timeMatch[2]) : 0;
+      const ampm = timeMatch[3]?.toUpperCase();
+      if (ampm === 'PM' && hour !== 12) hour += 12;
+      if (ampm === 'AM' && hour === 12) hour = 0;
+      if (!ampm && hour < 12) hour += 12; // Assume PM if no AM/PM specified and hour < 12
+    }
+    
+    // Extract duration (e.g., "for 15 mins", "15 minutes", "for 30 min")
+    let durationMinutes = 60; // Default 1 hour
+    const durationMatch = lower.match(/(?:for|duration:?)\s*(\d+)\s*(?:min(?:ute)?s?|mins?)/i);
+    if (durationMatch) {
+      durationMinutes = parseInt(durationMatch[1]);
+    }
+    
+    // Determine date from user input (use same logic as parseDateFromInput)
+    const today = new Date();
+    let eventDate = new Date(today);
+    
+    // Check for specific date references
+    if (lower.includes('tomorrow')) {
+      eventDate = addDays(today, 1);
+    } else if (lower.includes('next week')) {
+      eventDate = addWeeks(startOfWeek(today, { weekStartsOn: 1 }), 1);
+    } else if (lower.includes('this week')) {
+      eventDate = startOfWeek(today, { weekStartsOn: 1 });
+    } else if (lower.includes('next month')) {
+      eventDate = addMonths(today, 1);
+    } else {
+      // Check for day names (Monday, Tuesday, etc.)
+      const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+      for (let i = 0; i < dayNames.length; i++) {
+        if (lower.includes(dayNames[i])) {
+          const targetDay = i;
+          const currentDay = today.getDay();
+          let daysUntilTarget = (targetDay - currentDay + 7) % 7;
+          if (daysUntilTarget === 0) daysUntilTarget = 7; // If today, get next week's occurrence
+          eventDate = addDays(today, daysUntilTarget);
+          break;
+        }
+      }
+    }
+    
+    eventDate.setHours(hour, minute, 0, 0);
+    
+    // Extract title - remove time, duration, and common words
+    let title = 'Event';
+    const stopWords = ['add', 'an', 'event', 'for', 'at', 'pm', 'am', 'today', 'tomorrow', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'week', 'month', 'mins', 'minutes', 'min', 'duration'];
+    const timePattern = /(\d{1,2}):?(\d{2})?\s*(AM|PM)?/gi;
+    const durationPattern = /(?:for|duration:?)\s*\d+\s*(?:min(?:ute)?s?|mins?)/gi;
+    
+    // Remove time and duration from the request
+    let cleanedRequest = userRequest
+      .replace(timePattern, '')
+      .replace(durationPattern, '')
+      .trim();
+    
+    // Split into words and filter out stop words
+    const words = cleanedRequest
+      .split(/\s+/)
+      .filter(w => w.length > 0 && !stopWords.includes(w.toLowerCase()))
+      .filter(w => !w.match(/^\d+$/)); // Remove standalone numbers
+    
+    if (words.length > 0) {
+      // Take meaningful words (skip very short words unless they're important)
+      title = words
+        .filter(w => w.length > 2 || ['at', 'in', 'on'].includes(w.toLowerCase()))
+        .join(' ')
+        .trim();
+      
+      // If title is still empty or too short, use first few words
+      if (!title || title.length < 2) {
+        title = words.slice(0, 3).join(' ').trim();
+      }
+    }
+    
+    // Capitalize first letter
+    if (title && title.length > 0) {
+      title = title.charAt(0).toUpperCase() + title.slice(1).toLowerCase();
+    }
+    
+    // Calculate end time based on duration
+    const endTime = new Date(eventDate);
+    endTime.setMinutes(endTime.getMinutes() + durationMinutes);
+    
+    return { title: title || 'Event', start: eventDate, end: endTime };
+  };
+
+  const handleApproveAction = async (messageId: string) => {
     setMessages((prev) =>
       prev.map((msg) =>
         msg.id === messageId && msg.action
@@ -229,22 +665,89 @@ export function NexusChatbot({ onScheduleChange }: NexusChatbotProps) {
     );
 
     const message = messages.find((m) => m.id === messageId);
-    if (message?.action && onScheduleChange) {
-      onScheduleChange(message.action.type, message.action.details);
+    
+    if (message?.action) {
+      try {
+        // Ensure connected to MCP
+        if (!connected) {
+          await connect();
+        }
+        
+        // Execute calendar operation based on action type
+        if (message.action.type === "add" && message.action.userRequest) {
+          // Parse event details from user request
+          const eventDetails = parseEventDetails(message.action.userRequest);
+          
+          if (eventDetails) {
+            // Use MCP create_event tool
+            await callTool('create_event', {
+              calendarId: 'primary',
+              summary: eventDetails.title,
+              description: 'Created via Nexus Agent',
+              start: {
+                dateTime: eventDetails.start.toISOString(),
+              },
+              end: {
+                dateTime: eventDetails.end.toISOString(),
+              },
+            });
+            
+            // Reload calendar events to refresh context
+            await loadCalendarEvents();
+            
+            // Notify parent component
+            if (onScheduleChange) {
+              onScheduleChange(message.action.type, `Created event: ${eventDetails.title} at ${eventDetails.start.toLocaleTimeString()}`);
+            }
+            
+            // Add success message
+            setTimeout(() => {
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: Date.now().toString(),
+                  type: "agent",
+                  content: `✓ Calendar updated successfully. Created "${eventDetails.title}" at ${eventDetails.start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`,
+                  timestamp: new Date(),
+                },
+              ]);
+            }, 500);
+          } else {
+            throw new Error('Could not parse event details from your request');
+          }
+        } else {
+          // For other action types, just notify
+          if (onScheduleChange) {
+            onScheduleChange(message.action.type, message.action.details);
+          }
+          
+          setTimeout(() => {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: Date.now().toString(),
+                type: "agent",
+                content: "✓ Calendar updated successfully. Your schedule has been optimized.",
+                timestamp: new Date(),
+              },
+            ]);
+          }, 500);
+        }
+      } catch (error: any) {
+        console.error('Error executing calendar action:', error);
+        setTimeout(() => {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: Date.now().toString(),
+              type: "agent",
+              content: `Sorry, I encountered an error: ${error.message}. Please try again or add the event manually.`,
+              timestamp: new Date(),
+            },
+          ]);
+        }, 500);
+      }
     }
-
-    // Add confirmation message
-    setTimeout(() => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now().toString(),
-          type: "agent",
-          content: "✓ Calendar updated successfully. Your schedule has been optimized.",
-          timestamp: new Date(),
-        },
-      ]);
-    }, 500);
   };
 
   const handleRejectAction = (messageId: string) => {
@@ -275,6 +778,56 @@ export function NexusChatbot({ onScheduleChange }: NexusChatbotProps) {
       handleSendMessage();
     }
   };
+
+  // Expose handleSendMessage, messages, and refresh function globally for inline chat access
+  React.useEffect(() => {
+    (window as any).__nexusChatbotSendMessage = handleSendMessage;
+    (window as any).__nexusChatbotMessages = messages;
+    (window as any).__nexusChatbotIsTyping = isTyping;
+    (window as any).__nexusChatbotRefresh = async () => {
+      // Clear messages and reload calendar, but don't automatically send suggestions
+      setMessages([{
+        id: "1",
+        type: "agent",
+        content: "Good morning. I'm your Nexus Executive Agent. I can help you optimize your schedule, manage conflicts, and maximize your Triple Bottom Line. What would you like to adjust today?",
+        timestamp: new Date(),
+      }]);
+      // Reload calendar in background (day, week, month)
+      const today = getToday();
+      const dayStart = startOfDay(today);
+      const dayEnd = endOfDay(today);
+      const weekStart = startOfWeek(today, { weekStartsOn: 1 });
+      const weekEnd = endOfWeek(today, { weekStartsOn: 1 });
+      const monthStart = startOfMonth(today);
+      const monthEnd = endOfMonth(today);
+      
+      await Promise.all([
+        loadCalendarEvents({ startDate: dayStart, endDate: dayEnd }),
+        loadCalendarEvents({ startDate: weekStart, endDate: weekEnd }),
+        loadCalendarEvents({ startDate: monthStart, endDate: monthEnd }),
+      ]);
+      // Calendar is reloaded, but we wait for user to explicitly ask for suggestions
+    };
+    (window as any).__nexusChatbotLoadCalendar = loadCalendarEvents;
+    (window as any).__nexusChatbotHandleApprove = handleApproveAction;
+    (window as any).__nexusChatbotHandleReject = handleRejectAction;
+    (window as any).__nexusChatbotGenerateSuggestions = generateInitialSuggestions;
+    return () => {
+      delete (window as any).__nexusChatbotSendMessage;
+      delete (window as any).__nexusChatbotMessages;
+      delete (window as any).__nexusChatbotIsTyping;
+      delete (window as any).__nexusChatbotRefresh;
+      delete (window as any).__nexusChatbotLoadCalendar;
+      delete (window as any).__nexusChatbotHandleApprove;
+      delete (window as any).__nexusChatbotHandleReject;
+      delete (window as any).__nexusChatbotGenerateSuggestions;
+    };
+  }, [messages, isTyping, loadCalendarEvents, generateInitialSuggestions]);
+
+  // If hidden mode, just expose the send function and return null
+  if (isHidden) {
+    return null;
+  }
 
   return (
     <>
@@ -325,8 +878,8 @@ export function NexusChatbot({ onScheduleChange }: NexusChatbotProps) {
             </div>
 
             {/* Messages */}
-            <ScrollArea className="flex-1 p-4">
-              <div className="space-y-4">
+            <ScrollArea className="flex-1 min-h-0">
+              <div className="p-4 space-y-4">
                 {messages.map((message) => (
                   <div key={message.id}>
                     {message.type === "user" ? (

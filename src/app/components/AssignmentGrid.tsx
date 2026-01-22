@@ -2,6 +2,9 @@ import { Calendar, Clock, AlertTriangle } from "lucide-react";
 import { Card } from "@/app/components/ui/card";
 import { Badge } from "@/app/components/ui/badge";
 import { Progress } from "@/app/components/ui/progress";
+import { Button } from "@/app/components/ui/button";
+import { ScheduleAssignmentDialog } from "./ScheduleAssignmentDialog";
+import { useState } from "react";
 
 interface Assignment {
   id: string;
@@ -68,10 +71,18 @@ const assignments: Assignment[] = [
 ];
 
 export function AssignmentGrid() {
+  const [selectedAssignment, setSelectedAssignment] = useState<Assignment | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
+
   const priorityColors = {
     high: "border-red-500/50 bg-red-500/5",
     medium: "border-yellow-500/50 bg-yellow-500/5",
     low: "border-gray-500/50 bg-gray-500/5",
+  };
+
+  const handleScheduleClick = (assignment: Assignment) => {
+    setSelectedAssignment(assignment);
+    setDialogOpen(true);
   };
 
   return (
@@ -128,6 +139,18 @@ export function AssignmentGrid() {
           </div>
         ))}
       </div>
+
+      {/* Schedule Dialog */}
+      {selectedAssignment && (
+        <ScheduleAssignmentDialog
+          assignment={selectedAssignment}
+          open={dialogOpen}
+          onOpenChange={setDialogOpen}
+          onSuccess={() => {
+            // Could refresh assignments or show success message
+          }}
+        />
+      )}
     </Card>
   );
 }
