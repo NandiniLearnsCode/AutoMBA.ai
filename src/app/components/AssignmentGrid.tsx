@@ -135,41 +135,70 @@ function convertCanvasItem(canvasItem: any): CourseItem | null {
 
 // Simplified response parser - optimized for performance
 function parseCanvasResponse(response: any): any[] {
-  // Fast path: response is already an array of assignments
+  console.log('🔍 Parsing Canvas response:', {
+    isArray: Array.isArray(response),
+    hasContent: !!response?.content,
+    keys: response ? Object.keys(response) : [],
+  });
+  
+  // Fast path: response is already an array of items
   if (Array.isArray(response)) {
     const firstItem = response[0];
-    // Check if it's an array of assignments (has id or name) or content items
+    // Check if it's an array of items (has id or name) or content items
     if (firstItem && typeof firstItem === 'object') {
-      if ('id' in firstItem || 'name' in firstItem) {
-        return response; // Direct array of assignments
+      if ('id' in firstItem || 'name' in firstItem || 'title' in firstItem) {
+        console.log('✅ Response is direct array of items');
+        return response; // Direct array of items
       }
       // It's content items, find text content
       const textContent = response.find((item: any) => item.type === 'text');
       if (textContent?.text) {
         try {
           const parsed = JSON.parse(textContent.text);
+          console.log('✅ Parsed text content from array');
           return Array.isArray(parsed) ? parsed : [parsed];
-        } catch {
+        } catch (e) {
+          console.error('❌ Failed to parse text content from array:', e);
           return [];
         }
       }
     }
+    console.warn('⚠️ Array response but no valid items found');
     return [];
   }
   
-  // Handle object with content array
+  // Handle object with content array (MCP format)
   if (response?.content && Array.isArray(response.content)) {
     const textContent = response.content.find((item: any) => item.type === 'text');
     if (textContent?.text) {
       try {
         const parsed = JSON.parse(textContent.text);
+        console.log('✅ Parsed text content from MCP response');
         return Array.isArray(parsed) ? parsed : [parsed];
-      } catch {
+      } catch (e) {
+        console.error('❌ Failed to parse text content from MCP response:', e);
+        return [];
+      }
+    }
+    console.warn('⚠️ MCP response has content array but no text content found');
+  }
+  
+  // Handle direct result object (some MCP implementations)
+  if (response?.result?.content) {
+    const textContent = response.result.content.find((item: any) => item.type === 'text');
+    if (textContent?.text) {
+      try {
+        const parsed = JSON.parse(textContent.text);
+        console.log('✅ Parsed text content from result.content');
+        return Array.isArray(parsed) ? parsed : [parsed];
+      } catch (e) {
+        console.error('❌ Failed to parse text content from result.content:', e);
         return [];
       }
     }
   }
   
+  console.warn('⚠️ Could not parse response in any known format');
   return [];
 }
 
@@ -225,12 +254,32 @@ export function AssignmentGrid() {
     try {
       const startTime = Date.now();
       console.log('🚀 Fetching Canvas course items...');
+      console.log('📡 Calling tool: list_user_course_items');
       
       const response = await callTool('list_user_course_items', {});
+      console.log('📦 Raw response received:', response);
       
       // Parse response (optimized)
       const canvasItems = parseCanvasResponse(response);
       console.log(`✅ Found ${canvasItems.length} Canvas items in ${Date.now() - startTime}ms`);
+      
+      if (canvasItems.length === 0) {
+        console.warn('⚠️ No Canvas items returned from API. Check server logs.');
+        setItems([]);
+        itemsCountRef.current = 0;
+        return;
+      }
+      
+      // Log sample items for debugging
+      if (canvasItems.length > 0) {
+        console.log('📋 Sample items:', canvasItems.slice(0, 3).map(i => ({
+          type: i.type,
+          name: i.name || i.title,
+          due_at: i.due_at,
+          posted_at: i.posted_at,
+          start_at: i.start_at,
+        })));
+      }
 
       // Filter to show only items with due dates from January 2026 onwards
       const january2026 = new Date(2026, 0, 1); // January 1, 2026
@@ -284,11 +333,27 @@ export function AssignmentGrid() {
       const announcementsCount = jan2026AndFutureItems.filter(i => i.type === 'announcement').length;
       const calendarCount = jan2026AndFutureItems.filter(i => i.type === 'calendar_event').length;
       console.log(`📅 Filtered to ${assignmentsCount} assignments, ${quizzesCount} quizzes, ${announcementsCount} announcements, ${calendarCount} calendar events from January 2026 onwards`);
+      
+      // If no items after filtering, show all items as fallback for debugging
+      let itemsToConvert = jan2026AndFutureItems;
+      if (jan2026AndFutureItems.length === 0 && canvasItems.length > 0) {
+        console.warn('⚠️ No items match January 2026 filter. Showing all items for debugging.');
+        console.warn('📊 Total items before filter:', canvasItems.length);
+        console.warn('📊 Items by type:', {
+          assignments: canvasItems.filter(i => i.type === 'assignment').length,
+          quizzes: canvasItems.filter(i => i.type === 'quiz').length,
+          announcements: canvasItems.filter(i => i.type === 'announcement').length,
+          calendar_events: canvasItems.filter(i => i.type === 'calendar_event').length,
+        });
+        itemsToConvert = canvasItems;
+      }
 
       // Convert to our format and filter out nulls
-      const converted = jan2026AndFutureItems
+      const converted = itemsToConvert
         .map(convertCanvasItem)
         .filter((a): a is CourseItem => a !== null);
+      
+      console.log(`🔄 Converted ${converted.length} items (${itemsToConvert.length - converted.length} failed conversion)`);
 
       // Sort by priority and due date
       converted.sort((a, b) => {
@@ -303,9 +368,16 @@ export function AssignmentGrid() {
       
       if (converted.length === 0 && canvasItems.length === 0) {
         console.warn('⚠️ No Canvas items found.');
+      } else if (converted.length === 0 && canvasItems.length > 0) {
+        console.warn('⚠️ Items found but none passed conversion/filtering. Check console for details.');
       }
     } catch (error: any) {
       console.error('❌ Error fetching Canvas items:', error);
+      console.error('❌ Error details:', {
+        message: error?.message,
+        stack: error?.stack,
+        response: error?.response,
+      });
       setItems([]);
       itemsCountRef.current = 0;
     } finally {
