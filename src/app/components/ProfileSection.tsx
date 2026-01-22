@@ -1,10 +1,13 @@
+import { useState, useEffect } from "react";
 import { Calendar, CheckCircle2, Activity } from "lucide-react";
 import { Card } from "@/app/components/ui/card";
 import { Badge } from "@/app/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/app/components/ui/avatar";
+import { useMcpServer } from "@/hooks/useMcpServer";
 
 export function ProfileSection() {
-  const userProfile = {
+  const { connected, callTool, connect } = useMcpServer('google-calendar');
+  const [userProfile, setUserProfile] = useState({
     name: "Siddhant Patra",
     email: "spatra26@gsb.columbia.edu",
     program: "MBA Class of 2026",
@@ -15,7 +18,58 @@ export function ProfileSection() {
       canvas: true,
       appleHealth: true,
     },
-  };
+  });
+
+  // Fetch Google user info when connected
+  useEffect(() => {
+    const fetchUserInfo = async () => {
+      if (!connected) {
+        await connect();
+        return;
+      }
+
+      try {
+        const response = await callTool('get_user_info', {});
+        
+        // Parse the response
+        let userInfo: any = null;
+        if (Array.isArray(response)) {
+          const textContent = response.find((item: any) => item.type === 'text');
+          if (textContent?.text) {
+            try {
+              userInfo = JSON.parse(textContent.text);
+            } catch (e) {
+              console.error('Error parsing user info:', e);
+            }
+          } else if (response.length > 0 && typeof response[0] === 'object' && 'name' in response[0]) {
+            userInfo = response[0];
+          }
+        }
+
+        if (userInfo && userInfo.name) {
+          // Generate initials from name
+          const nameParts = userInfo.name.split(' ');
+          const initials = nameParts.length >= 2 
+            ? `${nameParts[0][0]}${nameParts[nameParts.length - 1][0]}`.toUpperCase()
+            : userInfo.name.substring(0, 2).toUpperCase();
+
+          setUserProfile(prev => ({
+            ...prev,
+            name: userInfo.name,
+            email: userInfo.email || prev.email,
+            initials: initials,
+          }));
+        }
+      } catch (error) {
+        console.error('Error fetching user info:', error);
+        // Keep default values on error
+      }
+    };
+
+    if (connected) {
+      fetchUserInfo();
+    }
+  }, [connected, callTool, connect]);
 
   return (
     <Card className="p-6">

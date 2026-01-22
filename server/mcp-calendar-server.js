@@ -198,6 +198,14 @@ app.post('/mcp', async (req, res) => {
                 },
                 required: ['eventId']
               }
+            },
+            {
+              name: 'get_user_info',
+              description: 'Get the authenticated user\'s profile information',
+              inputSchema: {
+                type: 'object',
+                properties: {}
+              }
             }
           ]
         };
@@ -306,6 +314,26 @@ app.post('/mcp', async (req, res) => {
             };
             break;
 
+          case 'get_user_info':
+            // Use OAuth2 client to get user info
+            const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+            const userInfoResponse = await oauth2.userinfo.get();
+            result = {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({
+                    name: userInfoResponse.data.name,
+                    email: userInfoResponse.data.email,
+                    picture: userInfoResponse.data.picture,
+                    given_name: userInfoResponse.data.given_name,
+                    family_name: userInfoResponse.data.family_name
+                  }, null, 2)
+                }
+              ]
+            };
+            break;
+
           default:
             throw new Error(`Unknown tool: ${name}`);
         }
@@ -378,7 +406,11 @@ app.get('/auth/url', (req, res) => {
     return res.status(500).json({ error: 'OAuth2 client not initialized' });
   }
 
-  const scopes = ['https://www.googleapis.com/auth/calendar'];
+  const scopes = [
+    'https://www.googleapis.com/auth/calendar',
+    'https://www.googleapis.com/auth/userinfo.profile',
+    'https://www.googleapis.com/auth/userinfo.email'
+  ];
   const url = oauth2Client.generateAuthUrl({
     access_type: 'offline',
     scope: scopes
