@@ -281,24 +281,38 @@ app.post('/mcp', async (req, res) => {
             break;
 
           case 'list_user_assignments':
-            // Get all courses first, then get assignments for each
+            // Get all courses first, then get assignments for each in parallel
+            const startTime = Date.now();
+            console.log('📚 Fetching Canvas courses...');
             const userCourses = await canvasRequest('/courses?enrollment_type=student&enrollment_state=active');
-            const allAssignments = [];
+            console.log(`✅ Found ${userCourses.length} courses, fetching assignments in parallel...`);
             
-            for (const course of userCourses) {
+            // Fetch assignments for all courses in parallel (much faster than sequential!)
+            const assignmentPromises = userCourses.map(async (course) => {
               try {
-                const courseAssignments = await canvasRequest(`/courses/${course.id}/assignments?include[]=submission`);
+                // Optimize: Limit to 50 assignments per course and only get submission data
+                // Fetch in parallel for all courses simultaneously
+                const courseAssignments = await canvasRequest(
+                  `/courses/${course.id}/assignments?include[]=submission&per_page=50&order_by=due_at`
+                );
                 // Add course info to each assignment
-                const assignmentsWithCourse = courseAssignments.map(a => ({
+                return courseAssignments.map(a => ({
                   ...a,
                   course_name: course.name,
                   course_code: course.course_code,
                 }));
-                allAssignments.push(...assignmentsWithCourse);
               } catch (error) {
-                console.warn(`Failed to fetch assignments for course ${course.id}:`, error.message);
+                console.warn(`⚠️ Failed to fetch assignments for course ${course.id} (${course.name}):`, error.message);
+                return []; // Return empty array on error
               }
-            }
+            });
+            
+            // Wait for all requests to complete in parallel
+            const assignmentArrays = await Promise.all(assignmentPromises);
+            const allAssignments = assignmentArrays.flat(); // Flatten array of arrays
+            
+            const duration = Date.now() - startTime;
+            console.log(`✅ Fetched ${allAssignments.length} total assignments from ${userCourses.length} courses in ${duration}ms`);
             
             result = {
               content: [
