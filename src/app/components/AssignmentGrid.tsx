@@ -291,20 +291,73 @@ export function AssignmentGrid() {
       console.log(`📦 Total items fetched: ${allItems.length}`);
       console.log('📋 Sample items:', allItems.slice(0, 3));
 
-      // NO FILTERING - Show everything we got!
+      // Filter to show only items from now until end of year
+      const now = new Date();
+      now.setHours(0, 0, 0, 0);
+      const endOfYear = new Date(now.getFullYear(), 11, 31, 23, 59, 59); // December 31, 11:59 PM
+      
+      console.log(`📅 Filtering items: Only showing items from ${format(now, 'MMM d, yyyy')} to ${format(endOfYear, 'MMM d, yyyy')}`);
+      
+      const filteredItems = allItems.filter((canvasItem) => {
+        // Get the appropriate date field based on type
+        let itemDate: Date | null = null;
+        
+        if (canvasItem.type === 'announcement') {
+          if (canvasItem.posted_at) {
+            try {
+              itemDate = parseISO(canvasItem.posted_at);
+            } catch {
+              if (canvasItem.created_at) {
+                try {
+                  itemDate = parseISO(canvasItem.created_at);
+                } catch {}
+              }
+            }
+          }
+        } else if (canvasItem.type === 'calendar_event') {
+          if (canvasItem.start_at) {
+            try {
+              itemDate = parseISO(canvasItem.start_at);
+            } catch {}
+          }
+        } else {
+          // Assignment or quiz - use due_at
+          if (canvasItem.due_at) {
+            try {
+              itemDate = parseISO(canvasItem.due_at);
+            } catch {}
+          }
+        }
+        
+        if (!itemDate) {
+          // Exclude items without dates
+          return false;
+        }
+        
+        // Include if date is between now and end of year
+        return itemDate >= now && itemDate <= endOfYear;
+      });
+      
+      const assignmentsCount = filteredItems.filter(i => i.type === 'assignment').length;
+      const quizzesCount = filteredItems.filter(i => i.type === 'quiz').length;
+      const announcementsCount = filteredItems.filter(i => i.type === 'announcement').length;
+      const calendarCount = filteredItems.filter(i => i.type === 'calendar_event').length;
+      console.log(`📅 Filtered to ${assignmentsCount} assignments, ${quizzesCount} quizzes, ${announcementsCount} announcements, ${calendarCount} calendar events (from now to end of year)`);
+      
       // Convert to our format and filter out nulls
-      const converted = allItems
+      const converted = filteredItems
         .map(convertCanvasItem)
         .filter((a): a is CourseItem => a !== null);
       
-      console.log(`🔄 Converted ${converted.length} items (${allItems.length - converted.length} failed conversion)`);
+      console.log(`🔄 Converted ${converted.length} items (${filteredItems.length - converted.length} failed conversion)`);
 
       // Sort by date (if available) or title
       converted.sort((a, b) => {
         // Try to sort by date first
         try {
-          const dateA = parseISO(a.dueDate === "No date" ? "9999-12-31" : a.dueDate);
-          const dateB = parseISO(b.dueDate === "No date" ? "9999-12-31" : b.dueDate);
+          // Parse dates from the formatted strings
+          const dateA = a.dueDate === "No date" ? new Date(9999, 11, 31) : parseISO(a.dueDate.split(' ')[0] + 'T00:00:00');
+          const dateB = b.dueDate === "No date" ? new Date(9999, 11, 31) : parseISO(b.dueDate.split(' ')[0] + 'T00:00:00');
           if (dateA.getTime() !== dateB.getTime()) {
             return dateA.getTime() - dateB.getTime();
           }
@@ -324,7 +377,9 @@ export function AssignmentGrid() {
       
       console.log(`✅ Successfully loaded ${converted.length} items in ${Date.now() - startTime}ms`);
       
-      if (converted.length === 0) {
+      if (converted.length === 0 && allItems.length > 0) {
+        console.warn('⚠️ Items found but none are within the current year date range.');
+      } else if (converted.length === 0) {
         console.warn('⚠️ No items could be converted. Check item format.');
       }
     } catch (error: any) {
@@ -485,8 +540,8 @@ export function AssignmentGrid() {
         )}
         {filteredItems.length === 0 && !loadingItems && hasTriedFetch && !connectionError && (
           <div className="text-center py-8 text-sm text-muted-foreground">
-            <p>No {activeTab === "all" ? "items" : activeTab} found.</p>
-            <p className="text-xs mt-1">Make sure Canvas is connected and you have course items.</p>
+            <p>No {activeTab === "all" ? "items" : activeTab} found for the current year.</p>
+            <p className="text-xs mt-1">Make sure Canvas is connected and you have course items with dates from now through December 31.</p>
             <p className="text-xs mt-1">Check browser console (F12) for details.</p>
           </div>
         )}
