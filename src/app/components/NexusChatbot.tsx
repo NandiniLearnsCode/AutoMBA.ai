@@ -788,11 +788,26 @@ ${calendarContextText}
       if (!ampm && hour < 12) hour += 12; // Assume PM if no AM/PM specified and hour < 12
     }
     
-    // Extract duration (e.g., "for 15 mins", "15 minutes", "for 30 min")
+    // Extract duration - improved regex to catch more variations
+    // Matches: "for 15 mins", "15 minutes", "for 30 min", "30 mins", "15min", etc.
     let durationMinutes = 60; // Default 1 hour
-    const durationMatch = lower.match(/(?:for|duration:?)\s*(\d+)\s*(?:min(?:ute)?s?|mins?)/i);
-    if (durationMatch) {
-      durationMinutes = parseInt(durationMatch[1]);
+    const durationPatterns = [
+      /(?:for|duration:?)\s*(\d+)\s*(?:min(?:ute)?s?|mins?)/i,  // "for 15 mins"
+      /(\d+)\s*(?:min(?:ute)?s?|mins?)/i,                        // "15 mins" (without "for")
+      /(\d+)\s*(?:hour|hr|hrs|hours?)/i,                         // "1 hour", "2 hours"
+    ];
+    
+    for (const pattern of durationPatterns) {
+      const durationMatch = lower.match(pattern);
+      if (durationMatch) {
+        const value = parseInt(durationMatch[1]);
+        if (pattern.source.includes('hour')) {
+          durationMinutes = value * 60;
+        } else {
+          durationMinutes = value;
+        }
+        break; // Use first match
+      }
     }
     
     // Determine date from user input (use same logic as parseDateFromInput)
@@ -825,11 +840,17 @@ ${calendarContextText}
     
     eventDate.setHours(hour, minute, 0, 0);
     
-    // Extract title - remove time, duration, and common words
+    // Extract title - improved extraction to preserve important words
     let title = 'Event';
-    const stopWords = ['add', 'an', 'event', 'for', 'at', 'pm', 'am', 'today', 'tomorrow', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 'week', 'month', 'mins', 'minutes', 'min', 'duration'];
+    
+    // More targeted stop words - only remove truly unnecessary words
+    const stopWords = ['add', 'an', 'a', 'the', 'event', 'schedule', 'block', 'time', 'pm', 'am', 'today', 'tomorrow', 
+                       'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday', 
+                       'week', 'month', 'mins', 'minutes', 'min', 'duration', 'for', 'at', 'on', 'in'];
+    
+    // Patterns to remove: time and duration
     const timePattern = /(\d{1,2}):?(\d{2})?\s*(AM|PM)?/gi;
-    const durationPattern = /(?:for|duration:?)\s*\d+\s*(?:min(?:ute)?s?|mins?)/gi;
+    const durationPattern = /(?:for|duration:?)?\s*\d+\s*(?:min(?:ute)?s?|mins?|hour|hr|hrs|hours?)/gi;
     
     // Remove time and duration from the request
     let cleanedRequest = userRequest
@@ -840,25 +861,35 @@ ${calendarContextText}
     // Split into words and filter out stop words
     const words = cleanedRequest
       .split(/\s+/)
-      .filter(w => w.length > 0 && !stopWords.includes(w.toLowerCase()))
+      .filter(w => w.length > 0)
+      .filter(w => !stopWords.includes(w.toLowerCase()))
       .filter(w => !w.match(/^\d+$/)); // Remove standalone numbers
     
     if (words.length > 0) {
-      // Take meaningful words (skip very short words unless they're important)
-      title = words
-        .filter(w => w.length > 2 || ['at', 'in', 'on'].includes(w.toLowerCase()))
-        .join(' ')
-        .trim();
+      // Join all remaining words (don't filter by length - preserve words like "dinner")
+      title = words.join(' ').trim();
       
-      // If title is still empty or too short, use first few words
+      // If title is still empty, try a different approach: extract before time/duration
       if (!title || title.length < 2) {
-        title = words.slice(0, 3).join(' ').trim();
+        // Try to extract text before the time
+        const beforeTime = userRequest.split(/(\d{1,2}):?(\d{2})?\s*(AM|PM)?/i)[0].trim();
+        if (beforeTime) {
+          const beforeWords = beforeTime
+            .split(/\s+/)
+            .filter(w => w.length > 0 && !stopWords.includes(w.toLowerCase()));
+          if (beforeWords.length > 0) {
+            title = beforeWords.join(' ').trim();
+          }
+        }
       }
     }
     
-    // Capitalize first letter
+    // Capitalize first letter of each word (title case)
     if (title && title.length > 0) {
-      title = title.charAt(0).toUpperCase() + title.slice(1).toLowerCase();
+      title = title
+        .split(' ')
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .join(' ');
     }
     
     // Calculate end time based on duration
@@ -1158,35 +1189,48 @@ ${calendarContextText}
       {/* Floating Chat Button */}
       {!isOpen && (
         <div className="fixed bottom-6 right-24 z-50">
-          <Button
-            onClick={() => setIsOpen(true)}
-            className="h-14 w-14 rounded-full shadow-lg bg-gradient-to-br from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 relative group"
+          <motion.div
+            initial={{ scale: 0 }}
+            animate={{ scale: 1 }}
+            transition={{ type: "spring", stiffness: 260, damping: 20 }}
           >
-            <MessageSquare className="w-6 h-6 text-white" />
-            <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-green-500 border-2 border-background animate-pulse"></span>
-            
-            {/* Tooltip */}
-            <div className="absolute bottom-full right-0 mb-2 px-3 py-1 bg-foreground text-background text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-              Chat with Nexus Agent
-            </div>
-          </Button>
+            <Button
+              onClick={() => setIsOpen(true)}
+              className="h-16 w-16 rounded-full shadow-2xl bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-600 hover:via-purple-600 hover:to-pink-600 relative group transition-all duration-300 hover:scale-110 hover:shadow-purple-500/50"
+            >
+              <MessageSquare className="w-6 h-6 text-white drop-shadow-lg" />
+              <span className="absolute -top-1 -right-1 h-4 w-4 rounded-full bg-emerald-400 border-2 border-white shadow-lg animate-pulse"></span>
+              
+              {/* Tooltip */}
+              <div className="absolute bottom-full right-0 mb-3 px-3 py-1.5 bg-gray-900 text-white text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-all duration-200 pointer-events-none shadow-lg">
+                Chat with Nexus Agent
+                <div className="absolute top-full right-4 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-900"></div>
+              </div>
+            </Button>
+          </motion.div>
         </div>
       )}
 
       {/* Chat Panel */}
       {isOpen && (
-        <div className="fixed bottom-6 right-6 z-50 w-96 h-[600px] shadow-2xl animate-in fade-in slide-in-from-bottom-4 duration-300">
-          <Card className="h-full flex flex-col border-2">
+        <motion.div
+          initial={{ opacity: 0, y: 20, scale: 0.95 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 20, scale: 0.95 }}
+          transition={{ type: "spring", stiffness: 300, damping: 30 }}
+          className="fixed bottom-6 right-6 z-50 w-96 h-[600px] shadow-2xl animate-in fade-in slide-in-from-bottom-4 duration-300"
+        >
+          <Card className="h-full flex flex-col border-0 shadow-2xl overflow-hidden bg-white/95 backdrop-blur-xl">
             {/* Header */}
-            <div className="flex items-center justify-between p-4 border-b bg-gradient-to-r from-blue-500 to-purple-500">
-              <div className="flex items-center gap-2">
-                <div className="p-1.5 rounded-lg bg-white/20 backdrop-blur-sm">
-                  <Brain className="w-4 h-4 text-white" />
+            <div className="flex items-center justify-between p-4 border-b bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 shadow-lg">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-xl bg-white/20 backdrop-blur-md shadow-lg border border-white/30">
+                  <Brain className="w-5 h-5 text-white drop-shadow-sm" />
                 </div>
                 <div>
-                  <h3 className="font-semibold text-white text-sm">Nexus Agent</h3>
-                  <p className="text-xs text-white/80 flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse"></span>
+                  <h3 className="font-bold text-white text-sm tracking-tight">Nexus Agent</h3>
+                  <p className="text-xs text-white/90 flex items-center gap-1.5 font-medium">
+                    <span className="w-2 h-2 rounded-full bg-emerald-300 animate-pulse shadow-sm shadow-emerald-400"></span>
                     Active
                   </p>
                 </div>
@@ -1195,22 +1239,27 @@ ${calendarContextText}
                 variant="ghost"
                 size="sm"
                 onClick={() => setIsOpen(false)}
-                className="h-8 w-8 p-0 text-white hover:bg-white/20"
+                className="h-9 w-9 p-0 text-white hover:bg-white/25 rounded-lg transition-colors"
               >
                 <X className="w-4 h-4" />
               </Button>
             </div>
 
             {/* Messages */}
-            <ScrollArea className="flex-1 min-h-0">
-              <div className="p-4 space-y-4">
+            <ScrollArea className="flex-1 min-h-0 bg-gradient-to-b from-gray-50/50 to-white">
+              <div className="p-5 space-y-4">
                 {messages.map((message) => (
-                  <div key={message.id}>
+                  <motion.div
+                    key={message.id}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.3 }}
+                  >
                     {message.type === "user" ? (
                       <div className="flex justify-end">
-                        <div className="max-w-[80%] rounded-lg bg-blue-500 text-white p-3">
-                          <p className="text-sm">{message.content}</p>
-                          <span className="text-xs opacity-70 mt-1 block">
+                        <div className="max-w-[80%] rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 text-white p-3.5 shadow-lg shadow-indigo-500/30">
+                          <p className="text-sm leading-relaxed font-medium">{message.content}</p>
+                          <span className="text-xs opacity-80 mt-1.5 block font-light">
                             {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                           </span>
                         </div>
@@ -1278,9 +1327,9 @@ ${calendarContextText}
                       </div>
                     ) : (
                       // Action message
-                      <div className="flex gap-2">
-                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center shrink-0">
-                          <Sparkles className="w-4 h-4 text-white" />
+                      <div className="flex gap-3">
+                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center shrink-0 shadow-lg shadow-purple-500/30 border-2 border-white">
+                          <Sparkles className="w-5 h-5 text-white" />
                         </div>
                         <div className="max-w-[80%] flex-1">
                           <div className="rounded-lg border-2 border-blue-500 bg-blue-500/5 p-3">
@@ -1318,7 +1367,7 @@ ${calendarContextText}
                         </div>
                       </div>
                     )}
-                  </div>
+                  </motion.div>
                 ))}
                 
                 {isTyping && (
@@ -1344,7 +1393,7 @@ ${calendarContextText}
             </ScrollArea>
 
             {/* Input */}
-            <div className="p-4 border-t bg-muted/30">
+            <div className="p-4 border-t bg-white/80 backdrop-blur-sm border-gray-200">
               <div className="flex gap-2">
                 <Input
                   ref={inputRef}
@@ -1363,12 +1412,12 @@ ${calendarContextText}
                   <Send className="w-4 h-4" />
                 </Button>
               </div>
-              <p className="text-xs text-muted-foreground mt-2">
+              <p className="text-xs text-gray-500 mt-2.5 font-light">
                 Try: "Move gym to 2pm" or "Clear my afternoon"
               </p>
             </div>
           </Card>
-        </div>
+        </motion.div>
       )}
     </>
   );

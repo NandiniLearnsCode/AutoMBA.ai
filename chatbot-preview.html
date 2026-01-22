@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chatbot Design Preview</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @keyframes bounce {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+        .animate-bounce-delay-1 { animation: bounce 1.4s infinite; animation-delay: 0ms; }
+        .animate-bounce-delay-2 { animation: bounce 1.4s infinite; animation-delay: 150ms; }
+        .animate-bounce-delay-3 { animation: bounce 1.4s infinite; animation-delay: 300ms; }
+        .animate-pulse-slow { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+    </style>
+</head>
+<body class="bg-gray-100 p-8">
+    <div class="max-w-4xl mx-auto space-y-8">
+        <h1 class="text-3xl font-bold text-gray-900 mb-8">Chatbot Design Preview</h1>
+        
+        <!-- Floating Chat Button -->
+        <div class="bg-white p-6 rounded-xl shadow-lg">
+            <h2 class="text-xl font-semibold mb-4">Floating Chat Button</h2>
+            <div class="flex justify-center">
+                <div class="relative">
+                    <button class="h-16 w-16 rounded-full shadow-2xl bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-600 hover:via-purple-600 hover:to-pink-600 relative group transition-all duration-300 hover:scale-110 hover:shadow-purple-500/50 flex items-center justify-center">
+                        <svg class="w-6 h-6 text-white drop-shadow-lg" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path>
+                        </svg>
+                        <span class="absolute -top-1 -right-1 h-4 w-4 rounded-full bg-emerald-400 border-2 border-white shadow-lg animate-pulse-slow"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Chat Panel -->
+        <div class="bg-white rounded-xl shadow-2xl overflow-hidden" style="width: 384px; height: 600px;">
+            <!-- Header -->
+            <div class="flex items-center justify-between p-4 border-b bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 shadow-lg">
+                <div class="flex items-center gap-3">
+                    <div class="p-2 rounded-xl bg-white/20 backdrop-blur-md shadow-lg border border-white/30">
+                        <svg class="w-5 h-5 text-white drop-shadow-sm" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path>
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 class="font-bold text-white text-sm tracking-tight">Nexus Agent</h3>
+                        <p class="text-xs text-white/90 flex items-center gap-1.5 font-medium">
+                            <span class="w-2 h-2 rounded-full bg-emerald-300 animate-pulse-slow shadow-sm shadow-emerald-400"></span>
+                            Active
+                        </p>
+                    </div>
+                </div>
+                <button class="h-9 w-9 p-0 text-white hover:bg-white/25 rounded-lg transition-colors flex items-center justify-center">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
+            </div>
+
+            <!-- Messages -->
+            <div class="flex-1 overflow-y-auto bg-gradient-to-b from-gray-50/50 to-white p-5 space-y-4" style="height: calc(600px - 180px);">
+                <!-- Agent Message -->
+                <div class="flex gap-3">
+                    <div class="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center shrink-0 shadow-lg shadow-purple-500/30 border-2 border-white">
+                        <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path>
+                        </svg>
+                    </div>
+                    <div class="max-w-[80%]">
+                        <div class="rounded-2xl bg-white border border-gray-200 p-4 shadow-md">
+                            <p class="text-sm leading-relaxed text-gray-800">Good morning! I'm your Nexus Executive Agent. I can help you optimize your schedule, manage conflicts, and maximize your Triple Bottom Line. What would you like to adjust today?</p>
+                            <span class="text-xs text-gray-500 mt-2 block font-light">10:30 AM</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- User Message -->
+                <div class="flex justify-end">
+                    <div class="max-w-[80%] rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 text-white p-3.5 shadow-lg shadow-indigo-500/30">
+                        <p class="text-sm leading-relaxed font-medium">Schedule dinner at 5PM for 15 mins</p>
+                        <span class="text-xs opacity-80 mt-1.5 block font-light">10:31 AM</span>
+                    </div>
+                </div>
+
+                <!-- Action Message -->
+                <div class="flex gap-3">
+                    <div class="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center shrink-0 shadow-lg shadow-purple-500/30 border-2 border-white">
+                        <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z"></path>
+                        </svg>
+                    </div>
+                    <div class="max-w-[80%] flex-1">
+                        <div class="rounded-2xl border-2 border-purple-200 bg-gradient-to-br from-purple-50 to-indigo-50 p-4 shadow-lg">
+                            <div class="flex items-start gap-2 mb-3">
+                                <span class="bg-gradient-to-r from-indigo-500 to-purple-600 text-white text-xs font-semibold px-2.5 py-1 rounded-md shadow-sm capitalize">add</span>
+                            </div>
+                            <p class="text-sm mb-4 text-gray-700 leading-relaxed">I'll schedule "Dinner" at 5:00 PM for 15 minutes. Would you like me to proceed?</p>
+                            <div class="flex gap-2">
+                                <button class="flex-1 bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-600 hover:to-green-700 text-white text-sm font-medium py-2 px-3 rounded-lg shadow-md hover:shadow-lg transition-all">
+                                    ✓ Approve
+                                </button>
+                                <button class="flex-1 border border-gray-300 hover:bg-gray-50 text-sm font-medium py-2 px-3 rounded-lg shadow-sm">
+                                    ✕ Decline
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Typing Indicator -->
+                <div class="flex gap-3">
+                    <div class="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 flex items-center justify-center shrink-0 shadow-lg shadow-purple-500/30 border-2 border-white">
+                        <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path>
+                        </svg>
+                    </div>
+                    <div class="rounded-2xl bg-white border border-gray-200 p-4 shadow-md">
+                        <div class="flex gap-1.5">
+                            <span class="w-2.5 h-2.5 rounded-full bg-indigo-400 animate-bounce-delay-1"></span>
+                            <span class="w-2.5 h-2.5 rounded-full bg-purple-400 animate-bounce-delay-2"></span>
+                            <span class="w-2.5 h-2.5 rounded-full bg-pink-400 animate-bounce-delay-3"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Input -->
+            <div class="p-4 border-t bg-white/80 backdrop-blur-sm border-gray-200">
+                <div class="flex gap-2 mb-2.5">
+                    <input type="text" placeholder="Ask me to adjust your schedule..." class="flex-1 border border-gray-300 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-200 rounded-xl shadow-sm px-3 py-2 text-sm outline-none">
+                    <button class="bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-600 hover:via-purple-600 hover:to-pink-600 text-white shadow-lg hover:shadow-xl transition-all rounded-xl px-4 py-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path>
+                        </svg>
+                    </button>
+                </div>
+                <p class="text-xs text-gray-500 font-light">Try: "Move gym to 2pm" or "Clear my afternoon"</p>
+            </div>
+        </div>
+
+        <!-- Design Features List -->
+        <div class="bg-white p-6 rounded-xl shadow-lg">
+            <h2 class="text-xl font-semibold mb-4">Design Features</h2>
+            <ul class="space-y-2 text-gray-700">
+                <li class="flex items-start gap-2">
+                    <span class="text-indigo-500">✓</span>
+                    <span><strong>Modern Gradient:</strong> Indigo → Purple → Pink gradient throughout</span>
+                </li>
+                <li class="flex items-start gap-2">
+                    <span class="text-indigo-500">✓</span>
+                    <span><strong>Enhanced Shadows:</strong> Depth with shadow-lg and colored shadows</span>
+                </li>
+                <li class="flex items-start gap-2">
+                    <span class="text-indigo-500">✓</span>
+                    <span><strong>Rounded Corners:</strong> rounded-2xl for modern, soft appearance</span>
+                </li>
+                <li class="flex items-start gap-2">
+                    <span class="text-indigo-500">✓</span>
+                    <span><strong>Better Typography:</strong> Improved font weights and spacing</span>
+                </li>
+                <li class="flex items-start gap-2">
+                    <span class="text-indigo-500">✓</span>
+                    <span><strong>Animated Elements:</strong> Pulse effects, bounce animations</span>
+                </li>
+                <li class="flex items-start gap-2">
+                    <span class="text-indigo-500">✓</span>
+                    <span><strong>Improved Message Bubbles:</strong> Gradient user messages, clean agent messages</span>
+                </li>
+                <li class="flex items-start gap-2">
+                    <span class="text-indigo-500">✓</span>
+                    <span><strong>Action Cards:</strong> Gradient backgrounds with better badges</span>
+                </li>
+                <li class="flex items-start gap-2">
+                    <span class="text-indigo-500">✓</span>
+                    <span><strong>Better Input Area:</strong> Rounded corners, improved focus states</span>
+                </li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>
