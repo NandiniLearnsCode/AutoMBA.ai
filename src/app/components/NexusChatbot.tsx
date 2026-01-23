@@ -869,16 +869,24 @@ ${calendarContextText}
   };
 
   const handleApproveAction = async (messageId: string) => {
-    setMessages((prev) =>
-      prev.map((msg) =>
+    // Find the message BEFORE updating state to avoid stale closure issues
+    let targetMessage: Message | undefined;
+
+    setMessages((prev) => {
+      // Get the message from the current state (not stale closure)
+      targetMessage = prev.find((m) => m.id === messageId);
+      return prev.map((msg) =>
         msg.id === messageId && msg.action
           ? { ...msg, action: { ...msg.action, status: "approved" as const } }
           : msg
-      )
-    );
+      );
+    });
 
-    const message = messages.find((m) => m.id === messageId);
-    
+    // Small delay to ensure state update completes and targetMessage is set
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    const message = targetMessage;
+
     if (message?.action) {
       try {
         // Ensure connected to MCP
