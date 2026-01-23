@@ -87,7 +87,9 @@ export function CommandCenter({ userFocus }: CommandCenterProps) {
     };
 
     loadTodayEvents();
-  }, [fetchEvents, getEvents]);
+    // Only depend on the functions, not on their results to avoid infinite loops
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Empty deps - only run once on mount, or when explicitly needed
 
   // Get current time-based greeting
   const currentHour = new Date().getHours();

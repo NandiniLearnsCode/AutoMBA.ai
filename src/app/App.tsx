@@ -147,7 +147,9 @@ function AppContent() {
     };
 
     generateRecommendations();
-  }, [fetchEvents, getEvents]);
+    // Only run once on mount, or when explicitly triggered
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Empty deps to prevent infinite loops
 
   const handleAcceptSuggestion = async (id: string, suggestionData?: {
     assignmentId?: string;

@@ -268,7 +268,9 @@ export function TimelineView() {
       endDate = endOfMonth(currentDate);
     }
     await fetchEvents(startDate, endDate);
-  }, [view, currentDate, fetchEvents]);
+    // Only depend on view and currentDate - fetchEvents is stable from useCallback
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, currentDate]);
 
   useEffect(() => {
     loadCalendarEvents();

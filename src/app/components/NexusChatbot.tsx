@@ -651,7 +651,8 @@ ${calendarContextText}
             }).then(async (response: any) => {
               console.log('[Chatbot] Auto-execute: create_event response:', response);
 
-              // Invalidate CalendarContext cache so TimelineView refreshes
+              // Invalidate CalendarContext cache - this won't trigger a fetch, just clears cache
+              // Components will refetch when they need to
               invalidateCalendarCache();
 
               // Get event ID from response for undo functionality
@@ -817,16 +818,21 @@ ${calendarContextText}
     const currentHour = new Date().getHours();
 
     // Build a list of busy times from calendar events
-    const busyTimes = calendarEvents.map(e => ({
-      title: e.title,
-      time: e.time,
-      duration: e.duration,
-      date: format(e.startDate, 'yyyy-MM-dd')
-    }));
+    const busyTimes = calendarEvents
+      .filter(e => e.startDate && !isNaN(e.startDate.getTime()))
+      .map(e => ({
+        title: e.title,
+        time: e.time,
+        duration: e.duration,
+        date: format(e.startDate, 'yyyy-MM-dd')
+      }));
 
     // Find free slots for today (simple approach: gaps between events)
     const todayEvents = calendarEvents
-      .filter(e => format(e.startDate, 'yyyy-MM-dd') === todayStr)
+      .filter(e => {
+        if (!e.startDate || isNaN(e.startDate.getTime())) return false;
+        return format(e.startDate, 'yyyy-MM-dd') === todayStr;
+      })
       .sort((a, b) => a.startDate.getTime() - b.startDate.getTime());
 
     let freeSlots: string[] = [];
@@ -898,18 +904,61 @@ Return ONLY this JSON format, no other text:
 
       const parsed = JSON.parse(jsonMatch[0]);
 
-      // Convert to Date objects
-      const [hours, minutes] = parsed.time.split(':').map(Number);
-      const eventDate = new Date(parsed.date);
-      eventDate.setHours(hours, minutes, 0, 0);
+      // Validate and convert to Date objects
+      if (!parsed.date || !parsed.time) {
+        console.error('[Chatbot] Missing date or time in parsed response:', parsed);
+        return null;
+      }
 
+      // Validate time format (HH:MM)
+      const timeParts = parsed.time.split(':');
+      if (timeParts.length !== 2) {
+        console.error('[Chatbot] Invalid time format:', parsed.time);
+        return null;
+      }
+
+      const [hours, minutes] = timeParts.map(Number);
+      if (isNaN(hours) || isNaN(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+        console.error('[Chatbot] Invalid time values:', hours, minutes);
+        return null;
+      }
+
+      // Validate date format (YYYY-MM-DD)
+      const dateParts = parsed.date.split('-');
+      if (dateParts.length !== 3) {
+        console.error('[Chatbot] Invalid date format:', parsed.date);
+        return null;
+      }
+
+      const [year, month, day] = dateParts.map(Number);
+      if (isNaN(year) || isNaN(month) || isNaN(day)) {
+        console.error('[Chatbot] Invalid date values:', year, month, day);
+        return null;
+      }
+
+      // Create date object with validation
+      const eventDate = new Date(year, month - 1, day, hours, minutes, 0, 0);
+      
+      // Validate the date is valid
+      if (isNaN(eventDate.getTime())) {
+        console.error('[Chatbot] Invalid date created:', { year, month, day, hours, minutes });
+        return null;
+      }
+
+      const durationMinutes = parsed.durationMinutes || 60;
       const endDate = new Date(eventDate);
-      endDate.setMinutes(endDate.getMinutes() + (parsed.durationMinutes || 60));
+      endDate.setMinutes(endDate.getMinutes() + durationMinutes);
+
+      // Final validation
+      if (isNaN(endDate.getTime())) {
+        console.error('[Chatbot] Invalid end date');
+        return null;
+      }
 
       console.log('[Chatbot] AI extracted event details:', parsed);
 
       return {
-        title: parsed.title,
+        title: parsed.title || 'Event',
         start: eventDate,
         end: endDate
       };
@@ -1072,7 +1121,7 @@ Return ONLY this JSON format, no other text:
             });
             console.log('[Chatbot] create_event response:', response);
 
-            // Invalidate CalendarContext cache so TimelineView refreshes
+            // Invalidate CalendarContext cache - components will refetch when needed
             invalidateCalendarCache();
 
             // Extract event ID and create Google Calendar link
@@ -1126,7 +1175,7 @@ Return ONLY this JSON format, no other text:
               end: { dateTime: eventDetails.end.toISOString() },
             });
 
-            // Invalidate CalendarContext cache so TimelineView refreshes
+            // Invalidate CalendarContext cache - components will refetch when needed
             invalidateCalendarCache();
 
             const updatedEvents = await loadCalendarEvents();

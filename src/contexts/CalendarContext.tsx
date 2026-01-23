@@ -68,6 +68,13 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
       
       const start = new Date(startTime);
       const end = new Date(event.end?.dateTime || event.end?.date || startTime);
+      
+      // Validate dates
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+        console.error('[CalendarContext] Invalid date in event:', event);
+        return null;
+      }
+      
       const duration = Math.round((end.getTime() - start.getTime()) / (1000 * 60)); // minutes
       
       const now = new Date();
@@ -121,9 +128,15 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
   }
 
   const fetchEvents = useCallback(async (startDate: Date, endDate: Date) => {
+    // Validate dates
+    if (!startDate || !endDate || isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+      console.error('[CalendarContext] Invalid date range provided');
+      return;
+    }
+
     if (!connected) {
       await connect();
-      return;
+      // Don't return - continue to fetch after connecting
     }
 
     // Prevent concurrent fetches
@@ -206,9 +219,11 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
   };
 
   // Clear cache to force next fetch (call after creating/updating/deleting events)
+  // This does NOT trigger a fetch - components should call fetchEvents if needed
   const invalidateCache = useCallback(() => {
-    console.log('[CalendarContext] Cache invalidated');
+    console.log('[CalendarContext] Cache invalidated - components should fetch if needed');
     lastFetchRef.current = null;
+    // Don't automatically fetch - let components decide when to refetch
   }, []);
 
   const value = {
