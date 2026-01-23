@@ -615,36 +615,34 @@ ${calendarContextText}
       const messageId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       currentMessageIdRef.current = messageId;
 
-      // Check if this message ID was already added (prevent duplicates)
-      setMessages((prev) => {
-        const existingMessage = prev.find((m) => m.id === messageId);
-        if (existingMessage) {
-          console.warn("Duplicate message ID detected, skipping");
-          return prev;
-        }
+      // For simple additions, use AI to extract event details intelligently
+      if (shouldAutoExecute && connected) {
+        console.log('[Chatbot] Auto-execute: using AI to extract event details...');
 
-        // For simple additions, auto-execute immediately
-        if (shouldAutoExecute) {
-          // Parse and execute the addition
-          const eventDetails = parseEventDetails(messageToSend);
-          console.log('[Chatbot] Auto-execute: parsed event details:', eventDetails, 'connected:', connected);
+        // Use AI to extract smart event details with calendar context
+        const eventDetails = await extractEventDetailsWithAI(messageToSend, eventsArray)
+          || parseEventDetails(messageToSend); // Fallback to basic parsing
 
-          if (eventDetails && connected) {
-            // Return temporary message, will be updated after execution
-            const tempMessage: Message = {
-              id: messageId,
-              type: "agent",
-              content: `Adding "${eventDetails.title}" to your calendar...`,
-              timestamp: new Date(),
-            };
+        console.log('[Chatbot] Auto-execute: extracted event details:', eventDetails);
 
-            // Determine priority from user input (default to "flexible" for simple additions)
-            const isHardBlock = /(?:class|meeting|interview|exam|deadline|must|required|critical)/i.test(messageToSend);
-            const priority = isHardBlock ? "hard-block" : "flexible";
+        if (eventDetails) {
+          // Add temporary message
+          const tempMessage: Message = {
+            id: messageId,
+            type: "agent",
+            content: `Adding "${eventDetails.title}" to your calendar at ${format(eventDetails.start, 'h:mm a')}...`,
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, tempMessage]);
 
-            console.log('[Chatbot] Auto-execute: calling create_event for:', eventDetails.title);
-            // Auto-execute: create event immediately (async, don't await)
-            callTool('create_event', {
+          // Determine priority from user input
+          const isHardBlock = /(?:class|meeting|interview|exam|deadline|must|required|critical)/i.test(messageToSend);
+          const priority = isHardBlock ? "hard-block" : "flexible";
+
+          console.log('[Chatbot] Auto-execute: calling create_event for:', eventDetails.title, 'at', format(eventDetails.start, 'h:mm a'));
+
+          // Create the event
+          callTool('create_event', {
               calendarId: 'primary',
               summary: eventDetails.title,
               description: `Added via Kaisey: ${messageToSend}\nPriority: ${priority}`,
@@ -734,10 +732,10 @@ ${calendarContextText}
               toastFn.error("Failed to add event", {
                 description: error.message || "Please try again",
               });
-              
+
               // Update message to show error
-              setMessages((prev) => prev.map((msg) => 
-                msg.id === messageId 
+              setMessages((prev) => prev.map((msg) =>
+                msg.id === messageId
                   ? {
                       ...msg,
                       content: `Sorry, I couldn't add that event. ${error.message || "Please try again."}`,
@@ -746,8 +744,17 @@ ${calendarContextText}
               ));
             });
 
-            return [...prev, tempMessage];
-          }
+          // Return early - we've handled this as auto-execute
+          return;
+        }
+      }
+
+      // For non-auto-execute cases, add the AI response as a message
+      setMessages((prev) => {
+        const existingMessage = prev.find((m) => m.id === messageId);
+        if (existingMessage) {
+          console.warn("Duplicate message ID detected, skipping");
+          return prev;
         }
 
         const agentMessage: Message = actionType
@@ -797,7 +804,122 @@ ${calendarContextText}
     }
   };
 
-  // Helper to parse event details from user request
+  // AI-powered event extraction - uses LLM to intelligently extract event details
+  const extractEventDetailsWithAI = async (
+    userRequest: string,
+    calendarEvents: ParsedEvent[]
+  ): Promise<{ title: string; start: Date; end: Date } | null> => {
+    const apiKey = getOpenAIApiKey();
+    if (!apiKey) return null;
+
+    const today = getToday();
+    const todayStr = format(today, 'yyyy-MM-dd');
+    const currentHour = new Date().getHours();
+
+    // Build a list of busy times from calendar events
+    const busyTimes = calendarEvents.map(e => ({
+      title: e.title,
+      time: e.time,
+      duration: e.duration,
+      date: format(e.startDate, 'yyyy-MM-dd')
+    }));
+
+    // Find free slots for today (simple approach: gaps between events)
+    const todayEvents = calendarEvents
+      .filter(e => format(e.startDate, 'yyyy-MM-dd') === todayStr)
+      .sort((a, b) => a.startDate.getTime() - b.startDate.getTime());
+
+    let freeSlots: string[] = [];
+    if (todayEvents.length === 0) {
+      freeSlots = ['Most of the day is free'];
+    } else {
+      // Check gaps between events
+      let lastEnd = Math.max(currentHour, 8); // Start from current hour or 8am
+      for (const event of todayEvents) {
+        const eventStart = parseInt(event.time.split(':')[0]);
+        if (eventStart > lastEnd + 1) {
+          freeSlots.push(`${lastEnd}:00 - ${eventStart}:00`);
+        }
+        const eventEnd = eventStart + Math.ceil(event.duration / 60);
+        lastEnd = Math.max(lastEnd, eventEnd);
+      }
+      if (lastEnd < 21) { // Before 9pm
+        freeSlots.push(`${lastEnd}:00 - 21:00`);
+      }
+    }
+
+    const prompt = `Extract event details from the user's request. Return ONLY valid JSON.
+
+User request: "${userRequest}"
+
+Today's date: ${todayStr}
+Current time: ${currentHour}:00
+
+Existing calendar events today:
+${busyTimes.length > 0 ? busyTimes.map(e => `- ${e.title} at ${e.time} (${e.duration}min)`).join('\n') : 'No events scheduled'}
+
+Free time slots today: ${freeSlots.join(', ')}
+
+Instructions:
+1. Extract a clear, concise event TITLE (not the raw request, but a proper event name like "Dinner", "Gym Session", "Study Time", etc.)
+2. Determine the DATE (default to today unless specified otherwise like "tomorrow", "Monday", etc.)
+3. Determine the TIME:
+   - If user specifies a time, use it
+   - If no time specified, pick a free slot that makes sense for the activity
+   - Avoid scheduling over existing events
+4. Determine DURATION (default 60 minutes unless specified)
+
+Return ONLY this JSON format, no other text:
+{"title": "Event Name", "date": "YYYY-MM-DD", "time": "HH:MM", "durationMinutes": 60}`;
+
+    try {
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.3,
+          max_tokens: 150,
+        }),
+      });
+
+      if (!response.ok) return null;
+
+      const data = await response.json();
+      const content = data.choices[0]?.message?.content?.trim();
+
+      // Parse JSON from response
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) return null;
+
+      const parsed = JSON.parse(jsonMatch[0]);
+
+      // Convert to Date objects
+      const [hours, minutes] = parsed.time.split(':').map(Number);
+      const eventDate = new Date(parsed.date);
+      eventDate.setHours(hours, minutes, 0, 0);
+
+      const endDate = new Date(eventDate);
+      endDate.setMinutes(endDate.getMinutes() + (parsed.durationMinutes || 60));
+
+      console.log('[Chatbot] AI extracted event details:', parsed);
+
+      return {
+        title: parsed.title,
+        start: eventDate,
+        end: endDate
+      };
+    } catch (error) {
+      console.error('[Chatbot] AI event extraction failed:', error);
+      return null;
+    }
+  };
+
+  // Fallback: basic regex parsing (used when AI extraction fails)
   const parseEventDetails = (userRequest: string): { title: string; start: Date; end: Date } | null => {
     const lower = userRequest.toLowerCase();
     
