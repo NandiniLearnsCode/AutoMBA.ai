@@ -180,14 +180,28 @@ export async function retrieveRelevantDocuments(
             relevance,
           };
         })
-        .filter((item) => item.relevance > 0.1) // Filter low relevance
-        .sort((a, b) => b.relevance - a.relevance)
-        .slice(0, topK);
+        .sort((a, b) => b.relevance - a.relevance);
       
-      console.log(`[RAG] Found ${scored.length} relevant documents:`, 
-        scored.map(s => `"${s.document.title}" (relevance: ${s.relevance.toFixed(3)})`));
+      // Log all similarity scores for debugging
+      console.log(`[RAG] All document similarity scores:`, 
+        documentsWithEmbeddings.map((doc, idx) => {
+          const relevance = doc.embedding
+            ? cosineSimilarity(queryEmbedding, doc.embedding)
+            : 0;
+          return `"${doc.title}": ${relevance.toFixed(3)}`;
+        }));
       
-      return scored;
+      // Use a lower threshold (0.05) or take top K regardless of threshold
+      // This ensures we always get some context if documents exist
+      const filtered = scored.filter((item) => item.relevance > 0.05);
+      const result = filtered.length > 0 
+        ? filtered.slice(0, topK)
+        : scored.slice(0, topK); // If nothing passes threshold, take top K anyway
+      
+      console.log(`[RAG] Found ${result.length} relevant documents:`, 
+        result.map(s => `"${s.document.title}" (relevance: ${s.relevance.toFixed(3)})`));
+      
+      return result;
     } catch (error) {
       console.warn("Embedding-based retrieval failed, falling back to keyword search:", error);
       // Fall through to keyword search
@@ -229,9 +243,16 @@ export function formatDocumentsForPrompt(
   const formatted = relevantDocs
     .map(
       (item, index) =>
-        `**Document ${index + 1}: ${item.document.title}**\n${item.document.content.substring(0, 1000)}${item.document.content.length > 1000 ? "..." : ""}`
+        `**Document ${index + 1}: ${item.document.title}** (Relevance: ${item.relevance.toFixed(3)})\n${item.document.content.substring(0, 1500)}${item.document.content.length > 1500 ? "..." : ""}`
     )
     .join("\n\n---\n\n");
   
-  return `\n\n**Relevant Context from Your Documents:**\n${formatted}\n\nUse this context to inform your recommendations. Reference specific information from these documents when relevant.`;
+  console.log(`[RAG] Formatted document context (${formatted.length} chars):`, formatted.substring(0, 200) + "...");
+  
+  return `\n\n**IMPORTANT: Relevant Context from User's Uploaded Documents:**\n${formatted}\n\n**CRITICAL INSTRUCTIONS:** 
+- You MUST reference and use information from these documents when answering the user's question
+- If the user asks about something covered in these documents, cite specific details from them
+- If the documents contain relevant information, prioritize that over generic advice
+- Quote or paraphrase specific content from the documents to show you've read them
+- If the question relates to the document content, make it clear you're using information from their uploaded documents`;
 }

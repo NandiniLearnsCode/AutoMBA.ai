@@ -412,11 +412,12 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
         hour12: true 
       });
       
-      // Build query from user message and calendar context
+      // Build query - prioritize user message, add calendar context as secondary
       const calendarEventsText = calendarContext && calendarContext.length > 0
         ? calendarContext.map(e => e.title).join(", ")
         : "no events";
-      const query = `${userMessage}. Today's schedule: ${calendarEventsText}. Time: ${currentTime}. Day: ${dayOfWeek}.`;
+      // Put user message first for better semantic matching
+      const query = `${userMessage}. Context: ${calendarEventsText}.`;
       
       console.log("[Chatbot RAG] Starting document retrieval...");
       const relevantDocs = await retrieveRelevantDocuments(query, apiKey, 3);
@@ -438,7 +439,7 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
 - Be actionable: Suggest specific changes with clear reasoning
 - Be conversational: Use friendly, natural language (e.g., "Hey!" instead of "Good morning")
 - Remember context: ALWAYS maintain awareness of the current calendar state. If you just updated the calendar, reference the new state directly without asking the user to re-list events.
-- Use document context: Reference information from the user's uploaded documents when relevant to provide more personalized and informed recommendations.
+${documentContext ? `- **CRITICAL: The user has uploaded documents that contain relevant information. You MUST actively use and reference this information in your response. If the user's question relates to content in these documents, cite specific details from them. Make it clear when you're using information from their uploaded documents.**` : ''}
 
 **Response Format:**
 1. **Summary** (1-2 sentences): High-level recommendation
@@ -470,7 +471,7 @@ ${documentContext}
             { role: "user", content: userMessage },
           ],
           temperature: 0.7,
-          max_tokens: 500,
+          max_tokens: 1000, // Increased to allow for document references
         }),
       });
 
