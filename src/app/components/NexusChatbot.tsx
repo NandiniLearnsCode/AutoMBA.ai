@@ -1210,7 +1210,7 @@ ${calendarContextText}
             
             {/* Tooltip */}
             <div className="absolute bottom-full right-0 mb-2 px-3 py-1 bg-foreground text-background text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-              Chat with Nexus Agent
+              Chat with Kaisey
             </div>
           </Button>
         </div>
@@ -1227,7 +1227,7 @@ ${calendarContextText}
                   <Brain className="w-4 h-4 text-white" />
                 </div>
                 <div>
-                  <h3 className="font-semibold text-white text-sm">Nexus Agent</h3>
+                  <h3 className="font-semibold text-white text-sm">Kaisey</h3>
                   <p className="text-xs text-white/80 flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse"></span>
                     Active

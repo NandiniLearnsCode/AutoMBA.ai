@@ -1,7 +1,7 @@
 // MCP Context for React
 // Provides MCP client access throughout the application
 
-import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
 import { mcpClientService, McpTool, McpResource } from '@/services/mcpClient';
 import { toast } from 'sonner';
 
@@ -44,46 +44,56 @@ export function McpProvider({ children, servers = [] }: McpProviderProps) {
     });
   }, [servers]);
 
-  const updateLoading = (serverName: string, isLoading: boolean) => {
+  const updateLoading = useCallback((serverName: string, isLoading: boolean) => {
     setLoading((prev) => new Map(prev).set(serverName, isLoading));
-  };
+  }, []);
 
-  const updateError = (serverName: string, error: string | null) => {
+  const updateError = useCallback((serverName: string, error: string | null) => {
     setErrors((prev) => new Map(prev).set(serverName, error));
-  };
+  }, []);
 
-  const updateConnected = (serverName: string, isConnected: boolean) => {
+  const updateConnected = useCallback((serverName: string, isConnected: boolean) => {
     setConnected((prev) => new Map(prev).set(serverName, isConnected));
-  };
+  }, []);
 
-  const connectServer = async (serverName: string) => {
+  const connectServer = useCallback(async (serverName: string) => {
     updateLoading(serverName, true);
     updateError(serverName, null);
 
     try {
       await mcpClientService.connect(serverName);
-      updateConnected(serverName, true);
-      
-      // Refresh tools and resources after connection
-      await refreshTools(serverName);
-      await refreshResources(serverName);
-      
+      setConnected((prev) => new Map(prev).set(serverName, true));
+
+      // Refresh tools and resources after connection (inline to avoid dependency issues)
+      try {
+        const serverTools = await mcpClientService.listTools(serverName);
+        setTools((prev) => new Map(prev).set(serverName, serverTools));
+      } catch (e) {
+        console.error(`Failed to refresh tools for ${serverName}:`, e);
+      }
+      try {
+        const serverResources = await mcpClientService.listResources(serverName);
+        setResources((prev) => new Map(prev).set(serverName, serverResources));
+      } catch (e) {
+        console.error(`Failed to refresh resources for ${serverName}:`, e);
+      }
+
       toast.success(`Connected to ${serverName}`);
     } catch (error: any) {
       const errorMessage = error.message || 'Failed to connect';
       updateError(serverName, errorMessage);
-      updateConnected(serverName, false);
+      setConnected((prev) => new Map(prev).set(serverName, false));
       toast.error(`Failed to connect to ${serverName}: ${errorMessage}`);
     } finally {
       updateLoading(serverName, false);
     }
-  };
+  }, [updateLoading, updateError]);
 
-  const disconnectServer = async (serverName: string) => {
+  const disconnectServer = useCallback(async (serverName: string) => {
     updateLoading(serverName, true);
     try {
       await mcpClientService.disconnect(serverName);
-      updateConnected(serverName, false);
+      setConnected((prev) => new Map(prev).set(serverName, false));
       setTools((prev) => {
         const newMap = new Map(prev);
         newMap.delete(serverName);
@@ -100,27 +110,27 @@ export function McpProvider({ children, servers = [] }: McpProviderProps) {
     } finally {
       updateLoading(serverName, false);
     }
-  };
+  }, [updateLoading, updateError]);
 
-  const refreshTools = async (serverName: string) => {
+  const refreshTools = useCallback(async (serverName: string) => {
     try {
       const serverTools = await mcpClientService.listTools(serverName);
       setTools((prev) => new Map(prev).set(serverName, serverTools));
     } catch (error: any) {
       console.error(`Failed to refresh tools for ${serverName}:`, error);
     }
-  };
+  }, []);
 
-  const refreshResources = async (serverName: string) => {
+  const refreshResources = useCallback(async (serverName: string) => {
     try {
       const serverResources = await mcpClientService.listResources(serverName);
       setResources((prev) => new Map(prev).set(serverName, serverResources));
     } catch (error: any) {
       console.error(`Failed to refresh resources for ${serverName}:`, error);
     }
-  };
+  }, []);
 
-  const callTool = async (
+  const callTool = useCallback(async (
     serverName: string,
     toolName: string,
     args: Record<string, any>
@@ -133,7 +143,7 @@ export function McpProvider({ children, servers = [] }: McpProviderProps) {
       toast.error(`Failed to call ${toolName}: ${errorMessage}`);
       throw error;
     }
-  };
+  }, []);
 
   const value: McpContextValue = {
     servers: servers.map((s) => s.name),

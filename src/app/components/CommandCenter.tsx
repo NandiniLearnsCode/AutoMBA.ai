@@ -183,7 +183,7 @@ export function CommandCenter({ userFocus }: CommandCenterProps) {
   const classCount = eventTypes.class || 0;
   const networkingCount = (eventTypes.networking || 0) + (eventTypes.recruiting || 0);
   
-  let message = `${greeting}, Siddhant! `;
+  let message = `${greeting}, Star MBA Student! `;
   
   if (totalEvents > 0) {
     message += scheduleDescription;
