@@ -318,6 +318,7 @@ function parseMcpEvent(event: CalendarEvent): TimeBlock | null {
 export function TimelineView() {
   const [timeBlocks, setTimeBlocks] = useState<TimeBlock[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [hasLoaded, setHasLoaded] = useState(false); // Track if initial load completed
   const [view, setView] = useState<"day" | "week" | "month">("day"); // Default to day view
   // Set to today's date (system date) - contextually aware
   const [currentDate, setCurrentDate] = useState(() => {
@@ -447,6 +448,7 @@ export function TimelineView() {
       
       console.log('[TimelineView] Successfully parsed', parsedEvents.length, 'events from', events.length, 'raw events');
       setTimeBlocks(parsedEvents);
+      setHasLoaded(true); // Mark as loaded even if no events
     } catch (err: any) {
       console.error('Error loading calendar via MCP:', err);
       setError(err.message || 'Failed to load Google Calendar events');
@@ -530,10 +532,10 @@ export function TimelineView() {
     }
   };
 
-  // Combine loading states
-  const isLoading = loading || (connected && timeBlocks.length === 0 && !error);
-  
-  if (isLoading && timeBlocks.length === 0) {
+  // Show loading only when actually loading, not when there are simply no events
+  const isLoading = loading || (!hasLoaded && connected && !error);
+
+  if (isLoading && !hasLoaded) {
     return (
       <Card className="p-4">
         <div className="flex items-center justify-center py-8">
