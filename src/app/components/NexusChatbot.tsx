@@ -12,6 +12,10 @@ import { getOpenAIApiKey } from "@/config/apiKey";
 import { useMcpServer } from "@/hooks/useMcpServer";
 import { format, startOfWeek, endOfWeek, addDays, addWeeks, addMonths, startOfDay, endOfDay, startOfMonth, endOfMonth } from "date-fns";
 import { getToday } from "@/utils/dateUtils";
+import {
+  retrieveRelevantDocuments,
+  formatDocumentsForPrompt,
+} from "@/services/documentService";
 
 // ParsedEvent type (matching the format from googleCalendar.ts)
 interface ParsedEvent {
@@ -397,6 +401,36 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
       ).join('\n')}\n\nUse this calendar information to make informed suggestions. Consider conflicts, priorities, and tradeoffs.`;
     }
 
+    // RAG: Retrieve relevant documents based on user message and calendar context
+    let documentContext = "";
+    try {
+      const today = getToday();
+      const dayOfWeek = format(today, "EEEE");
+      const currentTime = new Date().toLocaleTimeString('en-US', { 
+        hour: '2-digit', 
+        minute: '2-digit', 
+        hour12: true 
+      });
+      
+      // Build query from user message and calendar context
+      const calendarEventsText = calendarContext && calendarContext.length > 0
+        ? calendarContext.map(e => e.title).join(", ")
+        : "no events";
+      const query = `${userMessage}. Today's schedule: ${calendarEventsText}. Time: ${currentTime}. Day: ${dayOfWeek}.`;
+      
+      console.log("[Chatbot RAG] Starting document retrieval...");
+      const relevantDocs = await retrieveRelevantDocuments(query, apiKey, 3);
+      documentContext = formatDocumentsForPrompt(relevantDocs);
+      
+      if (documentContext) {
+        console.log("[Chatbot RAG] Document context retrieved and added to prompt");
+      } else {
+        console.log("[Chatbot RAG] No relevant documents found for this query");
+      }
+    } catch (ragError) {
+      console.warn("[Chatbot RAG] RAG retrieval failed, continuing without document context:", ragError);
+    }
+
     const systemPrompt = `You are Kaisey, an AI assistant helping MBA students optimize their schedules.
 
 **Core Principles:**
@@ -404,6 +438,7 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
 - Be actionable: Suggest specific changes with clear reasoning
 - Be conversational: Use friendly, natural language (e.g., "Hey!" instead of "Good morning")
 - Remember context: ALWAYS maintain awareness of the current calendar state. If you just updated the calendar, reference the new state directly without asking the user to re-list events.
+- Use document context: Reference information from the user's uploaded documents when relevant to provide more personalized and informed recommendations.
 
 **Response Format:**
 1. **Summary** (1-2 sentences): High-level recommendation
@@ -412,10 +447,13 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
 
 ${calendarContextText}
 
+${documentContext}
+
 **When suggesting actions:** 
 - For simple additions (dinner, casual meetings, personal events): Just do it and confirm. Don't ask for approval or provide lengthy reasoning.
 - For complex moves that impact hard blocks (classes, interviews, exams): Explain the impact and ask for approval.
-- NEVER ask the user to "provide your schedule" or "list your events" if you have access to calendar data or just updated it. Use the calendar context provided.`;
+- NEVER ask the user to "provide your schedule" or "list your events" if you have access to calendar data or just updated it. Use the calendar context provided.
+- When relevant, reference specific information from the user's documents to support your recommendations.`;
 
     try {
       const response = await fetch("https://api.openai.com/v1/chat/completions", {
