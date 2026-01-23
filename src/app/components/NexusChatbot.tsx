@@ -560,8 +560,10 @@ ${calendarContextText}
       // Check for specific scheduling intents - expanded to include more common phrases
       const hasScheduleIntent = /schedule|block time|study for|add .* (at|to|for)|create .* (at|to|for)|put .* (at|on|in)|book|set up/i.test(messageToSend);
       const hasInsteadOfIntent = /instead of|replace/i.test(messageToSend);
+      const hasDeleteIntent = /delete|cancel|remove|clear/i.test(messageToSend) && 
+        !/don't delete|don't cancel|don't remove/i.test(messageToSend);
 
-      console.log('[Chatbot] Intent detection:', { hasScheduleIntent, hasInsteadOfIntent, lowerInput });
+      console.log('[Chatbot] Intent detection:', { hasScheduleIntent, hasInsteadOfIntent, hasDeleteIntent, lowerInput });
       
       // More conservative detection - only mark as action if it's proposing a specific action
       const actionPatterns = {
@@ -575,12 +577,21 @@ ${calendarContextText}
       const isSimpleAddition = hasScheduleIntent && !hasInsteadOfIntent && 
         !/(?:move|reschedule|shift|cancel|delete|replace|instead)/i.test(messageToSend);
       
+      // Determine if this is a delete request
+      const isSimpleDeletion = hasDeleteIntent && !hasScheduleIntent;
+      
       // Check if action impacts hard blocks (requires approval)
       const impactsHardBlocks = /(?:class|meeting|interview|exam|deadline)/i.test(messageToSend) ||
         actionPatterns.move.test(lowerResponse) || actionPatterns.cancel.test(lowerResponse);
 
+      // If user explicitly uses delete keywords, mark as "cancel" action
+      if (hasDeleteIntent && !hasScheduleIntent) {
+        actionType = "cancel";
+        actionDetails = "Delete event";
+      }
+      
       // If user explicitly uses scheduling keywords, mark as "add" action
-      if (hasScheduleIntent && !hasInsteadOfIntent) {
+      if (hasScheduleIntent && !hasInsteadOfIntent && !hasDeleteIntent) {
         actionType = "add";
         actionDetails = "Schedule event";
       }
@@ -599,8 +610,9 @@ ${calendarContextText}
         actionDetails = "Optimization suggestion";
       }
 
-      // For simple additions, auto-execute without approval
-      const shouldAutoExecute = isSimpleAddition && actionType === "add" && !impactsHardBlocks;
+      // For simple additions or deletions, auto-execute without approval
+      const shouldAutoExecute = (isSimpleAddition && actionType === "add" && !impactsHardBlocks) ||
+        (isSimpleDeletion && actionType === "cancel");
 
       console.log('[Chatbot] Action detection result:', {
         actionType,
@@ -750,6 +762,98 @@ ${calendarContextText}
         }
       }
 
+      // For simple deletions, use AI to find the event to delete
+      if (isSimpleDeletion && actionType === "cancel" && connected && eventsArray.length > 0) {
+        console.log('[Chatbot] Auto-execute delete: finding event to delete...');
+
+        // Use AI to find the matching event
+        const eventToDelete = await findEventToDeleteWithAI(messageToSend, eventsArray);
+        
+        if (eventToDelete) {
+          console.log('[Chatbot] Auto-execute delete: found event:', eventToDelete);
+
+          // Add temporary message
+          const tempMessage: Message = {
+            id: messageId,
+            type: "agent",
+            content: `Deleting "${eventToDelete.title}" from your calendar...`,
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, tempMessage]);
+
+          // Delete the event
+          callTool('delete_event', {
+            calendarId: 'primary',
+            eventId: eventToDelete.id,
+          }).then(async () => {
+            console.log('[Chatbot] Auto-execute delete: event deleted');
+
+            // Invalidate CalendarContext cache
+            invalidateCalendarCache();
+
+            // Reload calendar to update state
+            const updatedEvents = await loadCalendarEvents();
+            setSessionState(prev => ({
+              ...prev,
+              lastUpdate: new Date(),
+              lastEvents: updatedEvents,
+              lastAction: "cancel",
+            }));
+
+            // Import toast for notification
+            const { toast: toastFn } = await import("sonner");
+            
+            // Show toast
+            toastFn.success("Event deleted", {
+              description: `"${eventToDelete.title}" has been removed from your calendar`,
+            });
+
+            // Update message to show success
+            setMessages((prev) => prev.map((msg) => 
+              msg.id === messageId 
+                ? {
+                    ...msg,
+                    type: "agent" as const,
+                    content: `✓ Deleted "${eventToDelete.title}" from your calendar.`,
+                  }
+                : msg
+            ));
+          }).catch((error) => {
+            console.error("Error auto-executing delete:", error);
+            const { toast: toastFn } = require("sonner");
+            toastFn.error("Failed to delete event", {
+              description: error.message || "Please try again",
+            });
+
+            // Update message to show error
+            setMessages((prev) => prev.map((msg) =>
+              msg.id === messageId
+                ? {
+                    ...msg,
+                    content: `Sorry, I couldn't delete that event. ${error.message || "Please try again."}`,
+                  }
+                : msg
+            ));
+          });
+
+          // Return early - we've handled this as auto-execute
+          return;
+        } else {
+          // Couldn't find matching event, let AI respond normally
+          console.log('[Chatbot] Auto-execute delete: no matching event found');
+        }
+      }
+
+      // For cancel actions that need approval, try to find the event ID
+      let foundEventId: string | undefined;
+      if (actionType === "cancel" && eventsArray.length > 0) {
+        const eventToDelete = await findEventToDeleteWithAI(messageToSend, eventsArray);
+        if (eventToDelete) {
+          foundEventId = eventToDelete.id;
+          actionDetails = `Delete "${eventToDelete.title}"`;
+        }
+      }
+
       // For non-auto-execute cases, add the AI response as a message
       setMessages((prev) => {
         const existingMessage = prev.find((m) => m.id === messageId);
@@ -769,6 +873,7 @@ ${calendarContextText}
                 details: actionDetails,
                 status: "pending",
                 userRequest: messageToSend, // Store user's original request for parsing
+                eventId: foundEventId, // Include event ID for cancel actions
               },
             }
           : {
@@ -964,6 +1069,92 @@ Return ONLY this JSON format, no other text:
       };
     } catch (error) {
       console.error('[Chatbot] AI event extraction failed:', error);
+      return null;
+    }
+  };
+
+  // AI-powered event finding for deletion - uses LLM to find the best matching event
+  const findEventToDeleteWithAI = async (
+    userRequest: string,
+    calendarEvents: ParsedEvent[]
+  ): Promise<{ id: string; title: string } | null> => {
+    const apiKey = getOpenAIApiKey();
+    if (!apiKey || calendarEvents.length === 0) return null;
+
+    const today = getToday();
+    const todayStr = format(today, 'yyyy-MM-dd');
+
+    // Build a list of events with their IDs
+    const eventsList = calendarEvents
+      .filter(e => e.startDate && !isNaN(e.startDate.getTime()))
+      .map((e, index) => ({
+        index,
+        id: e.id,
+        title: e.title,
+        time: e.time,
+        date: format(e.startDate, 'yyyy-MM-dd'),
+        duration: e.duration
+      }));
+
+    if (eventsList.length === 0) return null;
+
+    const prompt = `Find the event the user wants to delete. Return ONLY valid JSON.
+
+User request: "${userRequest}"
+
+Today's date: ${todayStr}
+
+Available events:
+${eventsList.map((e, i) => `${i + 1}. "${e.title}" on ${e.date} at ${e.time} (ID: ${e.id})`).join('\n')}
+
+Instructions:
+1. Find the event that best matches what the user wants to delete
+2. Match by event title, time, or date as described in the user's request
+3. If no clear match, return null
+
+Return ONLY this JSON format, no other text:
+{"eventIndex": 1, "eventId": "event_id_here", "eventTitle": "Event Title"}
+
+If no match found, return: {"eventIndex": null}`;
+
+    try {
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.1,
+          max_tokens: 100,
+        }),
+      });
+
+      if (!response.ok) return null;
+
+      const data = await response.json();
+      const content = data.choices[0]?.message?.content?.trim();
+
+      // Parse JSON from response
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) return null;
+
+      const parsed = JSON.parse(jsonMatch[0]);
+
+      if (parsed.eventIndex === null || !parsed.eventId) {
+        return null;
+      }
+
+      console.log('[Chatbot] AI found event to delete:', parsed);
+
+      return {
+        id: parsed.eventId,
+        title: parsed.eventTitle || 'Event'
+      };
+    } catch (error) {
+      console.error('[Chatbot] AI event finding failed:', error);
       return null;
     }
   };
@@ -1203,6 +1394,47 @@ Return ONLY this JSON format, no other text:
               ]);
             }, 500);
           }
+        } else if (message.action.type === "cancel" && message.action.eventId) {
+          // Handle delete/cancel event
+          console.log('[Chatbot] Deleting event:', message.action.eventId);
+          
+          await callTool('delete_event', {
+            calendarId: 'primary',
+            eventId: message.action.eventId,
+          });
+
+          // Invalidate CalendarContext cache - components will refetch when needed
+          invalidateCalendarCache();
+
+          const updatedEvents = await loadCalendarEvents();
+          setSessionState(prev => ({
+            ...prev,
+            lastUpdate: new Date(),
+            lastEvents: updatedEvents,
+            lastAction: "cancel",
+          }));
+          
+          // Refresh greeting with updated events
+          if (updatedEvents.length > 0) {
+            generatePersonalizedGreeting(updatedEvents);
+          }
+          
+          // Notify parent component
+          if (onScheduleChange) {
+            onScheduleChange(message.action.type, `Deleted event: ${message.action.details}`);
+          }
+          
+          setTimeout(() => {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: Date.now().toString(),
+                type: "agent",
+                content: "✓ Event deleted and removed from Google Calendar.",
+                timestamp: new Date(),
+              },
+            ]);
+          }, 500);
         } else {
           // For other action types, just notify
           if (onScheduleChange) {

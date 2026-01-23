@@ -208,6 +208,25 @@ app.post('/mcp', async (req, res) => {
                 },
                 required: ['eventId']
               }
+            },
+            {
+              name: 'delete_event',
+              description: 'Delete a calendar event',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  calendarId: {
+                    type: 'string',
+                    description: 'Calendar ID (default: primary)',
+                    default: 'primary'
+                  },
+                  eventId: {
+                    type: 'string',
+                    description: 'Event ID to delete'
+                  }
+                },
+                required: ['eventId']
+              }
             }
           ]
         };
@@ -311,6 +330,21 @@ app.post('/mcp', async (req, res) => {
                 {
                   type: 'text',
                   text: JSON.stringify(updateResponse.data, null, 2)
+                }
+              ]
+            };
+            break;
+
+          case 'delete_event':
+            await calendar.events.delete({
+              calendarId: args?.calendarId || 'primary',
+              eventId: args.eventId
+            });
+            result = {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({ success: true, deletedEventId: args.eventId }, null, 2)
                 }
               ]
             };
