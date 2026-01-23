@@ -649,7 +649,7 @@ ${calendarContextText}
           const tempMessage: Message = {
             id: messageId,
             type: "agent",
-            content: `Adding "${eventDetails.title}" to your calendar on ${format(eventDetails.start, 'EEEE, MMM d')} at ${format(eventDetails.start, 'h:mm a')}...`,
+            content: `Adding "${eventDetails.title}" to your calendar at ${format(eventDetails.start, 'h:mm a')}...`,
             timestamp: new Date(),
           };
           setMessages((prev) => [...prev, tempMessage]);
@@ -658,7 +658,7 @@ ${calendarContextText}
           const isHardBlock = /(?:class|meeting|interview|exam|deadline|must|required|critical)/i.test(messageToSend);
           const priority = isHardBlock ? "hard-block" : "flexible";
 
-          console.log('[Chatbot] Auto-execute: calling create_event for:', eventDetails.title, 'on', format(eventDetails.start, 'EEEE, MMM d'), 'at', format(eventDetails.start, 'h:mm a'));
+          console.log('[Chatbot] Auto-execute: calling create_event for:', eventDetails.title, 'at', format(eventDetails.start, 'h:mm a'));
 
           // Create the event
           callTool('create_event', {
@@ -707,7 +707,7 @@ ${calendarContextText}
               
               // Show toast with undo option
               toastFn.success("Event added to calendar", {
-                description: `${eventDetails.title} scheduled for ${format(eventDetails.start, 'EEEE, MMM d')} at ${format(eventDetails.start, 'h:mm a')}`,
+                description: `${eventDetails.title} scheduled for ${format(eventDetails.start, 'h:mm a')}`,
                 action: {
                   label: "Undo",
                   onClick: async () => {
@@ -733,7 +733,7 @@ ${calendarContextText}
                   ? {
                       ...msg,
                       type: "auto-executed" as const,
-                      content: `✓ Added "${eventDetails.title}" on ${format(eventDetails.start, 'EEEE, MMM d')} at ${format(eventDetails.start, 'h:mm a')}. ${googleCalendarLink ? `[View in Google Calendar](${googleCalendarLink})` : ''}`,
+                      content: `✓ Added "${eventDetails.title}" at ${format(eventDetails.start, 'h:mm a')}. ${googleCalendarLink ? `[View in Google Calendar](${googleCalendarLink})` : ''}`,
                       action: {
                         type: "add",
                         details: "Event added",
@@ -1345,7 +1345,7 @@ If no match found, return: {"eventIndex": null}`;
             
             // Notify parent component
             if (onScheduleChange) {
-              onScheduleChange(message.action.type, `Created event: ${eventDetails.title} on ${format(eventDetails.start, 'EEEE, MMM d')} at ${format(eventDetails.start, 'h:mm a')}`);
+              onScheduleChange(message.action.type, `Created event: ${eventDetails.title} at ${eventDetails.start.toLocaleTimeString()}`);
             }
             
             // Add success message with sync status
@@ -1355,7 +1355,7 @@ If no match found, return: {"eventIndex": null}`;
                 {
                   id: Date.now().toString(),
                   type: "agent",
-                  content: `✓ Synced to Google Calendar. Created "${eventDetails.title}" on ${format(eventDetails.start, 'EEEE, MMM d')} at ${format(eventDetails.start, 'h:mm a')}.${googleCalendarLink ? ` [View event](${googleCalendarLink})` : ''}`,
+                  content: `✓ Synced to Google Calendar. Created "${eventDetails.title}" at ${eventDetails.start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.${googleCalendarLink ? ` [View event](${googleCalendarLink})` : ''}`,
                   timestamp: new Date(),
                 },
               ]);
