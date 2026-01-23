@@ -584,30 +584,34 @@ ${calendarContextText}
       const impactsHardBlocks = /(?:class|meeting|interview|exam|deadline)/i.test(messageToSend) ||
         actionPatterns.move.test(lowerResponse) || actionPatterns.cancel.test(lowerResponse);
 
-      // If user explicitly uses delete keywords, mark as "cancel" action
-      if (hasDeleteIntent && !hasScheduleIntent) {
+      // PRIORITY 1: Check user's explicit intent first (these take precedence)
+      // User's delete intent should NOT be overridden by AI response patterns
+      if (hasDeleteIntent) {
         actionType = "cancel";
         actionDetails = "Delete event";
+        console.log('[Chatbot] User has explicit DELETE intent');
       }
-      
-      // If user explicitly uses scheduling keywords, mark as "add" action
-      if (hasScheduleIntent && !hasInsteadOfIntent && !hasDeleteIntent) {
+      // User's add intent (only if not deleting)
+      else if (hasScheduleIntent && !hasInsteadOfIntent) {
         actionType = "add";
         actionDetails = "Schedule event";
+        console.log('[Chatbot] User has explicit ADD intent');
       }
-
-      if (actionPatterns.move.test(lowerResponse)) {
-        actionType = "move";
-        actionDetails = "Schedule adjustment";
-      } else if (actionPatterns.cancel.test(lowerResponse)) {
-        actionType = "cancel";
-        actionDetails = "Cancel event";
-      } else if (actionPatterns.add.test(lowerResponse)) {
-        actionType = "add";
-        actionDetails = "Add to schedule";
-      } else if (actionPatterns.suggest.test(lowerResponse)) {
-        actionType = "suggest";
-        actionDetails = "Optimization suggestion";
+      // PRIORITY 2: Only check AI response patterns if user intent wasn't clear
+      else {
+        if (actionPatterns.move.test(lowerResponse)) {
+          actionType = "move";
+          actionDetails = "Schedule adjustment";
+        } else if (actionPatterns.cancel.test(lowerResponse)) {
+          actionType = "cancel";
+          actionDetails = "Cancel event";
+        } else if (actionPatterns.add.test(lowerResponse)) {
+          actionType = "add";
+          actionDetails = "Add to schedule";
+        } else if (actionPatterns.suggest.test(lowerResponse)) {
+          actionType = "suggest";
+          actionDetails = "Optimization suggestion";
+        }
       }
 
       // For simple additions or deletions, auto-execute without approval
@@ -618,6 +622,8 @@ ${calendarContextText}
         actionType,
         actionDetails,
         isSimpleAddition,
+        isSimpleDeletion,
+        hasDeleteIntent,
         impactsHardBlocks,
         shouldAutoExecute,
         aiResponsePreview: aiResponse.substring(0, 100)
@@ -628,8 +634,9 @@ ${calendarContextText}
       currentMessageIdRef.current = messageId;
 
       // For simple additions, use AI to extract event details intelligently
-      if (shouldAutoExecute && connected) {
-        console.log('[Chatbot] Auto-execute: using AI to extract event details...');
+      // IMPORTANT: Only run for ADD actions, not deletions
+      if (shouldAutoExecute && connected && actionType === "add" && isSimpleAddition) {
+        console.log('[Chatbot] Auto-execute ADD: using AI to extract event details...');
 
         // Use AI to extract smart event details with calendar context
         const eventDetails = await extractEventDetailsWithAI(messageToSend, eventsArray)
@@ -763,8 +770,9 @@ ${calendarContextText}
       }
 
       // For simple deletions, use AI to find the event to delete
-      if (isSimpleDeletion && actionType === "cancel" && connected && eventsArray.length > 0) {
-        console.log('[Chatbot] Auto-execute delete: finding event to delete...');
+      // IMPORTANT: Only run for CANCEL/DELETE actions
+      if (hasDeleteIntent && actionType === "cancel" && connected && eventsArray.length > 0) {
+        console.log('[Chatbot] Auto-execute DELETE: finding event to delete...');
 
         // Use AI to find the matching event
         const eventToDelete = await findEventToDeleteWithAI(messageToSend, eventsArray);
