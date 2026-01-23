@@ -10,6 +10,7 @@ import { ScrollArea } from "@/app/components/ui/scroll-area";
 import { motion, AnimatePresence } from "motion/react";
 import { getOpenAIApiKey } from "@/config/apiKey";
 import { useMcpServer } from "@/hooks/useMcpServer";
+import { useCalendar } from "@/contexts/CalendarContext";
 import { format, startOfWeek, endOfWeek, addDays, addWeeks, addMonths, startOfDay, endOfDay, startOfMonth, endOfMonth } from "date-fns";
 import { getToday } from "@/utils/dateUtils";
 
@@ -84,6 +85,9 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
   
   // Use MCP server hook for Google Calendar
   const { connected, loading: mcpLoading, error: mcpError, callTool, connect } = useMcpServer('google-calendar');
+
+  // Use CalendarContext to invalidate cache after calendar changes
+  const { invalidateCache: invalidateCalendarCache } = useCalendar();
 
   // Helper to parse MCP CalendarEvent to ParsedEvent format
   const parseMcpEventToParsed = (event: CalendarEvent): ParsedEvent | null => {
@@ -623,6 +627,8 @@ ${calendarContextText}
         if (shouldAutoExecute) {
           // Parse and execute the addition
           const eventDetails = parseEventDetails(messageToSend);
+          console.log('[Chatbot] Auto-execute: parsed event details:', eventDetails, 'connected:', connected);
+
           if (eventDetails && connected) {
             // Return temporary message, will be updated after execution
             const tempMessage: Message = {
@@ -635,7 +641,8 @@ ${calendarContextText}
             // Determine priority from user input (default to "flexible" for simple additions)
             const isHardBlock = /(?:class|meeting|interview|exam|deadline|must|required|critical)/i.test(messageToSend);
             const priority = isHardBlock ? "hard-block" : "flexible";
-            
+
+            console.log('[Chatbot] Auto-execute: calling create_event for:', eventDetails.title);
             // Auto-execute: create event immediately (async, don't await)
             callTool('create_event', {
               calendarId: 'primary',
@@ -644,6 +651,11 @@ ${calendarContextText}
               start: { dateTime: eventDetails.start.toISOString() },
               end: { dateTime: eventDetails.end.toISOString() },
             }).then(async (response: any) => {
+              console.log('[Chatbot] Auto-execute: create_event response:', response);
+
+              // Invalidate CalendarContext cache so TimelineView refreshes
+              invalidateCalendarCache();
+
               // Get event ID from response for undo functionality
               let createdEventId: string | undefined;
               if (typeof response === 'string') {
@@ -937,7 +949,10 @@ ${calendarContextText}
               },
             });
             console.log('[Chatbot] create_event response:', response);
-            
+
+            // Invalidate CalendarContext cache so TimelineView refreshes
+            invalidateCalendarCache();
+
             // Extract event ID and create Google Calendar link
             createdEventId = response?.id || (typeof response === 'string' ? JSON.parse(response)?.id : undefined);
             if (createdEventId) {
@@ -988,7 +1003,10 @@ ${calendarContextText}
               start: { dateTime: eventDetails.start.toISOString() },
               end: { dateTime: eventDetails.end.toISOString() },
             });
-            
+
+            // Invalidate CalendarContext cache so TimelineView refreshes
+            invalidateCalendarCache();
+
             const updatedEvents = await loadCalendarEvents();
             setSessionState(prev => ({
               ...prev,

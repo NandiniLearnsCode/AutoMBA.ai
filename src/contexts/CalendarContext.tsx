@@ -37,6 +37,7 @@ interface CalendarContextType {
   error: string | null;
   fetchEvents: (startDate: Date, endDate: Date) => Promise<void>;
   getEvents: (startDate: Date, endDate: Date) => ParsedEvent[];
+  invalidateCache: () => void; // Clear cache to force next fetch
 }
 
 const CalendarContext = createContext<CalendarContextType | undefined>(undefined);
@@ -204,12 +205,19 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  // Clear cache to force next fetch (call after creating/updating/deleting events)
+  const invalidateCache = useCallback(() => {
+    console.log('[CalendarContext] Cache invalidated');
+    lastFetchRef.current = null;
+  }, []);
+
   const value = {
     events,
     loading,
     error,
     fetchEvents,
     getEvents,
+    invalidateCache,
   };
 
   return (
