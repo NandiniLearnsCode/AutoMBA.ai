@@ -7,7 +7,8 @@
       "Bash(netstat:*)",
       "Bash(findstr:*)",
       "Bash(ss:*)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "WebFetch(domain:automba-ai-qqyo.onrender.com)"
     ]
   }
 }
