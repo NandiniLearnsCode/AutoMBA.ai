@@ -319,6 +319,7 @@ export function TimelineView() {
   const [timeBlocks, setTimeBlocks] = useState<TimeBlock[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [hasLoaded, setHasLoaded] = useState(false); // Track if initial load completed
+  const [isLoadingEvents, setIsLoadingEvents] = useState(false); // Track if currently loading events
   const [view, setView] = useState<"day" | "week" | "month">("day"); // Default to day view
   // Set to today's date (system date) - contextually aware
   const [currentDate, setCurrentDate] = useState(() => {
@@ -340,21 +341,28 @@ export function TimelineView() {
   );
 
   const loadCalendarEvents = useCallback(async () => {
+    // Don't start if already loading
+    if (isLoadingEvents) return;
+
     try {
       setError(null);
-      
+      setIsLoadingEvents(true);
+
       // Ensure connected to MCP server (connect is idempotent)
       if (!connected && !loading) {
         console.log('[TimelineView] Connecting to MCP server...');
         await connect();
-        // Connection state will update asynchronously, so we'll proceed
+        // Connection state will update asynchronously
         // The useEffect will retry when connected becomes true
         console.log('[TimelineView] Connection initiated, will retry when connected');
+        setIsLoadingEvents(false);
         return;
       }
-      
+
       if (!connected) {
         console.warn('[TimelineView] Not connected, skipping event load');
+        setIsLoadingEvents(false);
+        setHasLoaded(true); // Stop showing loading if we can't connect
         return;
       }
       
@@ -449,12 +457,15 @@ export function TimelineView() {
       console.log('[TimelineView] Successfully parsed', parsedEvents.length, 'events from', events.length, 'raw events');
       setTimeBlocks(parsedEvents);
       setHasLoaded(true); // Mark as loaded even if no events
+      setIsLoadingEvents(false);
     } catch (err: any) {
       console.error('Error loading calendar via MCP:', err);
       setError(err.message || 'Failed to load Google Calendar events');
       setTimeBlocks([]);
+      setHasLoaded(true); // Mark as loaded even on error to stop loading spinner
+      setIsLoadingEvents(false);
     }
-  }, [connected, callTool, connect, view, currentDate]);
+  }, [connected, callTool, connect, view, currentDate, isLoadingEvents]);
 
   useEffect(() => {
     // Connect to MCP server on mount if not connected
@@ -532,8 +543,8 @@ export function TimelineView() {
     }
   };
 
-  // Show loading only when actually loading, not when there are simply no events
-  const isLoading = loading || (!hasLoaded && connected && !error);
+  // Show loading only during initial load or active loading, not when there are simply no events
+  const isLoading = isLoadingEvents || loading || (!hasLoaded && !error && !mcpError);
 
   if (isLoading && !hasLoaded) {
     return (
