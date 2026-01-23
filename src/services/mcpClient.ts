@@ -53,9 +53,22 @@ export class McpClientService {
     });
 
     // Handle relative URLs by using the current origin as base
-    const url = config.url.startsWith('/')
-      ? new URL(config.url, window.location.origin)
-      : new URL(config.url);
+    // This is required because URL constructor needs an absolute URL
+    let url: URL;
+    try {
+      if (config.url.startsWith('/')) {
+        // Relative URL - prepend current origin
+        url = new URL(config.url, window.location.origin);
+      } else if (config.url.startsWith('http://') || config.url.startsWith('https://')) {
+        // Absolute URL - use directly
+        url = new URL(config.url);
+      } else {
+        // Assume relative URL without leading slash
+        url = new URL('/' + config.url, window.location.origin);
+      }
+    } catch (e) {
+      throw new Error(`Invalid MCP server URL: ${config.url}. Error: ${e instanceof Error ? e.message : 'Unknown error'}`);
+    }
 
     const transport = new StreamableHTTPClientTransport(
       url,
