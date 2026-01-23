@@ -10,6 +10,19 @@ import { google } from 'googleapis';
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Get base URL dynamically for production
+const getBaseUrl = () => {
+  if (process.env.BACKEND_URL) {
+    return process.env.BACKEND_URL;
+  }
+  if (process.env.RENDER_EXTERNAL_URL) {
+    return process.env.RENDER_EXTERNAL_URL;
+  }
+  return `http://localhost:${PORT}`;
+};
+
+const BASE_URL = getBaseUrl();
+
 // Enable CORS - allow all origins in production (Cloud Run)
 // In production, you may want to restrict this to your domain
 const allowedOrigins = process.env.ALLOWED_ORIGINS 
@@ -39,7 +52,7 @@ let calendar = null;
 function initializeOAuth2() {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const redirectUri = process.env.GOOGLE_REDIRECT_URI || 'http://localhost:3000/oauth2callback';
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI || ${BASE_URL}/oauth2callback;
 
   if (!clientId || !clientSecret) {
     console.warn('Google OAuth credentials not found in environment variables');
@@ -86,7 +99,7 @@ app.post('/mcp', async (req, res) => {
           id,
           error: {
             code: -32001,
-            message: 'OAuth2 not authenticated. Please visit http://localhost:3000/auth/url to authenticate first.'
+            message: `OAuth2 not authenticated. Please visit ${BASE_URL}/auth/url to authenticate first.`
           }
         });
       }
@@ -320,12 +333,12 @@ app.post('/mcp', async (req, res) => {
             break;
 
           default:
-            throw new Error(`Unknown tool: ${name}`);
+            throw new Error(Unknown tool: );
         }
         break;
 
       default:
-        throw new Error(`Unknown method: ${method}`);
+        throw new Error(Unknown method: );
     }
 
     res.json({
@@ -409,11 +422,11 @@ app.get('/health', (req, res) => {
     status: 'ok', 
     oauth2Initialized: !!oauth2Client,
     authenticated: isAuthenticated,
-    authUrl: isAuthenticated ? null : 'http://localhost:3000/auth/url'
+    authUrl: isAuthenticated ? null : `${BASE_URL}/auth/url`
   });
 });
 
 app.listen(PORT, () => {
-  console.log(`Google Calendar MCP Server running on http://localhost:${PORT}`);
-  console.log('MCP endpoint: http://localhost:3000/mcp');
+  console.log(`Google Calendar MCP Server running on ${BASE_URL}`);
+  console.log(`MCP endpoint: ${BASE_URL}/mcp`);
 });

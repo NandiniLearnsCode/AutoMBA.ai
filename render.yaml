@@ -1,0 +1,15 @@
+﻿services:
+  - type: web
+    name: automba-backend
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+  - type: static
+    name: automba-frontend
+    buildCommand: npm install && npm run build
+    staticPublishPath: ./dist
