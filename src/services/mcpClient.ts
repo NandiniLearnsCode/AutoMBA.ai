@@ -52,8 +52,13 @@ export class McpClientService {
       version: "1.0.0",
     });
 
+    // Handle relative URLs by using the current origin as base
+    const url = config.url.startsWith('/')
+      ? new URL(config.url, window.location.origin)
+      : new URL(config.url);
+
     const transport = new StreamableHTTPClientTransport(
-      new URL(config.url),
+      url,
       {
         requestInit: {
           headers: config.headers || {},
