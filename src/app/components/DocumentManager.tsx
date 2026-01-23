@@ -101,15 +101,34 @@ export function DocumentManager() {
   const extractTextFromPDF = async (file: File): Promise<string> => {
     try {
       // Dynamically import pdfjs-dist
-      const pdfjsLib = await import('pdfjs-dist');
+      let pdfjsLib;
+      try {
+        pdfjsLib = await import('pdfjs-dist');
+        console.log('pdfjs-dist imported successfully, version:', pdfjsLib.version);
+      } catch (importError: any) {
+        console.error('Failed to import pdfjs-dist:', importError);
+        throw new Error(`PDF library not available. Error: ${importError.message}. Please run: npm install pdfjs-dist`);
+      }
       
       // Set worker source (required for pdfjs)
       if (typeof window !== 'undefined') {
-        pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+        const version = pdfjsLib.version || '4.0.379';
+        // Try different worker paths - pdfjs-dist v4+ uses .mjs, older versions use .js
+        try {
+          // First try the new format (v4+)
+          pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${version}/build/pdf.worker.min.mjs`;
+        } catch {
+          // Fallback to old format
+          pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${version}/build/pdf.worker.min.js`;
+        }
+        console.log('PDF.js worker source set to:', pdfjsLib.GlobalWorkerOptions.workerSrc);
       }
 
       const arrayBuffer = await file.arrayBuffer();
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      const pdf = await pdfjsLib.getDocument({ 
+        data: arrayBuffer,
+        verbosity: 0 // Suppress console warnings
+      }).promise;
       
       let fullText = '';
       
@@ -123,19 +142,33 @@ export function DocumentManager() {
         fullText += pageText + '\n\n';
       }
       
+      if (!fullText.trim()) {
+        throw new Error('No text could be extracted from this PDF. It may be image-based or encrypted.');
+      }
+      
       return fullText.trim();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error extracting PDF text:', error);
-      throw new Error('Failed to extract text from PDF. Make sure the file is a valid PDF.');
+      const errorMessage = error.message || 'Unknown error';
+      if (errorMessage.includes('pdfjs-dist')) {
+        throw new Error('PDF library not installed. Run: npm install pdfjs-dist');
+      }
+      throw new Error(`Failed to extract text from PDF: ${errorMessage}`);
     }
   };
 
   const handleFileUpload = async (event: { target: { files: FileList | null } }) => {
     const file = event.target.files?.[0];
-    if (!file) return;
+    if (!file) {
+      console.log('No file selected');
+      return;
+    }
 
-    if (file.type !== 'application/pdf') {
-      setError('Please upload a PDF file');
+    console.log('File selected:', file.name, file.type, file.size);
+
+    // Check file type more flexibly
+    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+      setError('Please upload a PDF file (.pdf extension required)');
       return;
     }
 
@@ -144,12 +177,23 @@ export function DocumentManager() {
       return;
     }
 
+    if (file.size === 0) {
+      setError('The selected file is empty.');
+      return;
+    }
+
     setIsExtractingPDF(true);
     setError(null);
     setUploadedFileName(file.name);
 
     try {
+      console.log('Starting PDF extraction...');
       const extractedText = await extractTextFromPDF(file);
+      console.log('PDF extraction successful. Text length:', extractedText.length);
+      
+      if (!extractedText || extractedText.trim().length === 0) {
+        throw new Error('No text was extracted from the PDF. The file may be image-based or corrupted.');
+      }
       
       // Auto-fill title and content
       const fileNameWithoutExt = file.name.replace(/\.pdf$/i, '');
@@ -160,9 +204,18 @@ export function DocumentManager() {
       if (!isDialogOpen) {
         setIsDialogOpen(true);
       }
+      
+      console.log('PDF processed successfully. Dialog should be open.');
     } catch (err: any) {
-      setError(err.message || 'Failed to extract text from PDF');
+      console.error('PDF upload error:', err);
+      const errorMsg = err.message || 'Failed to extract text from PDF';
+      setError(errorMsg);
       setUploadedFileName(null);
+      
+      // Show error in dialog if it's open, or alert if not
+      if (!isDialogOpen) {
+        alert(`Error: ${errorMsg}\n\nCheck the browser console for details.`);
+      }
     } finally {
       setIsExtractingPDF(false);
       // Reset file input
@@ -295,15 +348,21 @@ export function DocumentManager() {
 
             <div className="space-y-4 mt-4">
               {error && (
-                <Alert variant="destructive">
-                  <AlertDescription>{error}</AlertDescription>
+                <Alert variant="destructive" className="border-red-500 bg-red-50">
+                  <AlertDescription className="text-red-800 font-medium">
+                    <strong>Error:</strong> {error}
+                    <br />
+                    <span className="text-xs mt-1 block">
+                      Check the browser console (F12) for more details.
+                    </span>
+                  </AlertDescription>
                 </Alert>
               )}
 
-              {uploadedFileName && (
-                <Alert>
-                  <FileIcon className="w-4 h-4" />
-                  <AlertDescription className="text-sm">
+              {uploadedFileName && !error && (
+                <Alert className="bg-green-50 border-green-200">
+                  <FileIcon className="w-4 h-4 text-green-600" />
+                  <AlertDescription className="text-sm text-green-800">
                     PDF uploaded: <strong>{uploadedFileName}</strong>. Text extracted and ready to save.
                   </AlertDescription>
                 </Alert>
