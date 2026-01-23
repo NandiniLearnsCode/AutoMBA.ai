@@ -50,3 +50,4 @@ calendarcredentials.json
 # Backend server
 server/.env
 server/tokens.json
+AutoMBA.ai/
