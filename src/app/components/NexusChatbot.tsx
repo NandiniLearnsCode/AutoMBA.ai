@@ -481,18 +481,16 @@ ${calendarContextText}
       timestamp: new Date(),
     };
 
-    // Use functional update to get the latest messages including the new user message
-    let currentMessages: Message[] = [];
-    setMessages((prev) => {
-      currentMessages = [...prev, userMessage];
-      return currentMessages;
-    });
+    // Add user message to state
+    setMessages((prev) => [...prev, userMessage]);
 
     try {
-      // Build conversation history from previous messages (excluding the new user message, as it will be added in callOpenAI)
-      // Include user, agent, and action messages (action messages are also part of the conversation)
-      const previousMessages = currentMessages.slice(0, -1); // Exclude the last message (the new user message)
-      const conversationHistory = previousMessages
+      // Build conversation history from messagesRef (always has latest state)
+      // This ensures we have full conversation context for the AI
+      const allPreviousMessages = messagesRef.current; // Get all messages before this new one
+      console.log('[Chatbot] Building conversation history from', allPreviousMessages.length, 'messages');
+
+      const conversationHistory = allPreviousMessages
         .filter(msg => {
           // Include user and agent messages
           if (msg.type === "user" || msg.type === "agent" || msg.type === "auto-executed") return true;
@@ -554,10 +552,12 @@ ${calendarContextText}
 
       // Enhanced intent parsing for scheduling keywords
       const lowerInput = messageToSend.toLowerCase();
-      
-      // Check for specific scheduling intents
-      const hasScheduleIntent = /schedule|block time|study for/i.test(messageToSend);
+
+      // Check for specific scheduling intents - expanded to include more common phrases
+      const hasScheduleIntent = /schedule|block time|study for|add .* (at|to|for)|create .* (at|to|for)|put .* (at|on|in)|book|set up/i.test(messageToSend);
       const hasInsteadOfIntent = /instead of|replace/i.test(messageToSend);
+
+      console.log('[Chatbot] Intent detection:', { hasScheduleIntent, hasInsteadOfIntent, lowerInput });
       
       // More conservative detection - only mark as action if it's proposing a specific action
       const actionPatterns = {
@@ -597,6 +597,15 @@ ${calendarContextText}
 
       // For simple additions, auto-execute without approval
       const shouldAutoExecute = isSimpleAddition && actionType === "add" && !impactsHardBlocks;
+
+      console.log('[Chatbot] Action detection result:', {
+        actionType,
+        actionDetails,
+        isSimpleAddition,
+        impactsHardBlocks,
+        shouldAutoExecute,
+        aiResponsePreview: aiResponse.substring(0, 100)
+      });
 
       // Generate unique message ID and track it
       const messageId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -875,8 +884,11 @@ ${calendarContextText}
   };
 
   const handleApproveAction = async (messageId: string) => {
+    console.log('[Chatbot] handleApproveAction called with messageId:', messageId);
+
     // Get the message from the ref which always has the latest state
     const message = messagesRef.current.find((m) => m.id === messageId);
+    console.log('[Chatbot] Found message:', message ? { id: message.id, action: message.action } : 'NOT FOUND');
 
     // Update message status to approved
     setMessages((prev) =>
@@ -888,6 +900,7 @@ ${calendarContextText}
     );
 
     if (message?.action) {
+      console.log('[Chatbot] Executing action type:', message.action.type, 'userRequest:', message.action.userRequest);
       try {
         // Ensure connected to MCP
         if (!connected) {
@@ -903,11 +916,14 @@ ${calendarContextText}
           const eventDetails = parseEventDetails(message.action.userRequest);
           
           if (eventDetails) {
+            console.log('[Chatbot] Parsed event details:', eventDetails);
+
             // Determine priority (default to flexible unless specified or detected from user input)
             const userRequest = message.action?.userRequest || "";
             const isHardBlock = /(?:class|meeting|interview|exam|deadline|must|required|critical)/i.test(userRequest);
             const priority = message.action?.priority || (isHardBlock ? "hard-block" : "flexible");
-            
+
+            console.log('[Chatbot] Creating calendar event...');
             // Use MCP create_event tool
             const response = await callTool('create_event', {
               calendarId: 'primary',
@@ -920,6 +936,7 @@ ${calendarContextText}
                 dateTime: eventDetails.end.toISOString(),
               },
             });
+            console.log('[Chatbot] create_event response:', response);
             
             // Extract event ID and create Google Calendar link
             createdEventId = response?.id || (typeof response === 'string' ? JSON.parse(response)?.id : undefined);
