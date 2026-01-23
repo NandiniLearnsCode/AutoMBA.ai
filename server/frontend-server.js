@@ -23,10 +23,13 @@ if (!existsSync(distPath)) {
   process.exit(1);
 }
 
+// Serve static files first
 app.use(express.static(distPath));
 
-// Handle SPA routing - serve index.html for all routes
-app.get('*', (req, res) => {
+// Handle SPA routing - serve index.html for all routes that don't match static files
+// Express 5 doesn't support app.get('*'), so we use app.use() as catch-all
+// express.static will call next() if file not found, then this middleware serves index.html
+app.use((req, res) => {
   res.sendFile(path.join(distPath, 'index.html'));
 });
 
