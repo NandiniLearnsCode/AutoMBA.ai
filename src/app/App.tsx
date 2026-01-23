@@ -13,6 +13,7 @@ import { ChatInputCard } from "@/app/components/ChatInputCard";
 import { ProfileSection } from "@/app/components/ProfileSection";
 import { Settings } from "@/app/components/Settings";
 import { McpProvider } from "@/contexts/McpContext";
+import { CalendarProvider, useCalendar } from "@/contexts/CalendarContext";
 import { getMcpServerConfigs } from "@/config/mcpServers";
 import { toast } from "sonner";
 import { generateAIRecommendations, AIRecommendation } from "@/utils/aiRecommendationService";
@@ -42,46 +43,19 @@ function AppContent() {
   
   // MCP server for calendar operations
   const { connected, callTool, connect } = useMcpServer('google-calendar');
+  const { getEvents, fetchEvents } = useCalendar();
 
   // Generate AI recommendations on mount
   useEffect(() => {
     const generateRecommendations = async () => {
-      if (!connected) {
-        await connect();
-        return;
-      }
-
       try {
         setLoadingRecommendations(true);
         const today = getToday();
         const dayStart = startOfDay(today);
         const dayEnd = endOfDay(today);
         
-        dayStart.setHours(0, 0, 0, 0);
-        dayEnd.setHours(23, 59, 59, 999);
-
-        // Load today's events
-        const response = await callTool('list_events', {
-          calendarId: 'primary',
-          timeMin: dayStart.toISOString(),
-          timeMax: dayEnd.toISOString(),
-          maxResults: 50,
-        });
-
-        // Parse events
-        let calendarEvents: any[] = [];
-        if (Array.isArray(response)) {
-          const textContent = response.find((item: any) => item.type === 'text');
-          if (textContent?.text) {
-            try {
-              calendarEvents = JSON.parse(textContent.text);
-            } catch (e) {
-              console.error('Error parsing calendar events:', e);
-            }
-          } else if (response.length > 0 && typeof response[0] === 'object' && 'id' in response[0]) {
-            calendarEvents = response;
-          }
-        }
+        await fetchEvents(dayStart, dayEnd);
+        const calendarEvents = getEvents(dayStart, dayEnd);
 
         // Convert to format expected by AI service
         const eventsForAI = calendarEvents
@@ -172,17 +146,8 @@ function AppContent() {
       }
     };
 
-    if (connected) {
-      generateRecommendations();
-      
-      // Refresh recommendations every 5 minutes to stay contextually aware
-      const refreshInterval = setInterval(() => {
-        generateRecommendations();
-      }, 5 * 60 * 1000); // 5 minutes
-      
-      return () => clearInterval(refreshInterval);
-    }
-  }, [connected, callTool, connect]);
+    generateRecommendations();
+  }, [fetchEvents, getEvents]);
 
   const handleAcceptSuggestion = async (id: string, suggestionData?: {
     assignmentId?: string;
@@ -448,7 +413,9 @@ export default function App() {
 
   return (
     <McpProvider servers={mcpServers}>
-      <AppContent />
+      <CalendarProvider>
+        <AppContent />
+      </CalendarProvider>
     </McpProvider>
   );
 }

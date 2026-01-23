@@ -5,6 +5,7 @@ import { format, startOfDay, endOfDay } from "date-fns";
 import { getToday } from "@/utils/dateUtils";
 import { useMcpServer } from "@/hooks/useMcpServer";
 import { useEffect, useState } from "react";
+import { useCalendar } from "@/contexts/CalendarContext";
 
 interface CalendarEvent {
   id: string;
@@ -18,111 +19,75 @@ interface CalendarEvent {
 }
 
 interface CommandCenterProps {
-  events?: CalendarEvent[];
   userFocus?: string | null;
 }
 
-export function CommandCenter({ events: propEvents = [], userFocus }: CommandCenterProps) {
-  const [loadedEvents, setLoadedEvents] = useState<CalendarEvent[]>([]);
+export function CommandCenter({ userFocus }: CommandCenterProps) {
   const { connected, callTool, connect } = useMcpServer('google-calendar');
-  
-  // Use prop events if provided, otherwise use loaded events
-  const events = propEvents.length > 0 ? propEvents : loadedEvents;
+  const { getEvents, fetchEvents, loading: calendarLoading } = useCalendar();
+  const [events, setEvents] = useState<CalendarEvent[]>([]);
 
   // Load today's events from calendar
   useEffect(() => {
     const loadTodayEvents = async () => {
-      if (!connected) {
-        await connect();
-        return;
-      }
+      const today = getToday();
+      const dayStart = startOfDay(today);
+      const dayEnd = endOfDay(today);
+      
+      await fetchEvents(dayStart, dayEnd);
+      const fetchedEvents = getEvents(dayStart, dayEnd);
 
-      try {
-        const today = getToday();
-        const dayStart = startOfDay(today);
-        const dayEnd = endOfDay(today);
-        
-        dayStart.setHours(0, 0, 0, 0);
-        dayEnd.setHours(23, 59, 59, 999);
+      // Convert to CalendarEvent format
+      const parsedEvents: CalendarEvent[] = fetchedEvents
+        .map((event: any) => {
+          const startTime = event.startDate;
+          if (!startTime) return null;
+          
+          const start = new Date(startTime);
+          const end = new Date(event.endDate);
+          const duration = Math.round((end.getTime() - start.getTime()) / (1000 * 60));
+          
+          const timeStr = start.toLocaleTimeString('en-US', { 
+            hour: '2-digit', 
+            minute: '2-digit', 
+            hour12: false 
+          });
 
-        const response = await callTool('list_events', {
-          calendarId: 'primary',
-          timeMin: dayStart.toISOString(),
-          timeMax: dayEnd.toISOString(),
-          maxResults: 50,
-        });
-
-        // Parse events (similar to TimelineView)
-        let calendarEvents: any[] = [];
-        if (Array.isArray(response)) {
-          const textContent = response.find((item: any) => item.type === 'text');
-          if (textContent?.text) {
-            try {
-              calendarEvents = JSON.parse(textContent.text);
-            } catch (e) {
-              console.error('Error parsing calendar events:', e);
-            }
-          } else if (response.length > 0 && typeof response[0] === 'object' && 'id' in response[0]) {
-            calendarEvents = response;
+          const summary = event.title || 'Untitled Event';
+          const lowerSummary = summary.toLowerCase();
+          let type: CalendarEvent['type'] = "meeting";
+          
+          if (lowerSummary.includes('class') || lowerSummary.includes('course') || lowerSummary.includes('lecture')) {
+            type = "class";
+          } else if (lowerSummary.includes('study') || lowerSummary.includes('homework') || lowerSummary.includes('assignment')) {
+            type = "study";
+          } else if (lowerSummary.includes('gym') || lowerSummary.includes('workout') || lowerSummary.includes('exercise')) {
+            type = "workout";
+          } else if (lowerSummary.includes('coffee') || lowerSummary.includes('networking') || lowerSummary.includes('chat')) {
+            type = "networking";
+          } else if (lowerSummary.includes('recruiting') || lowerSummary.includes('interview') || lowerSummary.includes('info session')) {
+            type = "recruiting";
           }
-        }
 
-        // Convert to CalendarEvent format
-        const parsedEvents: CalendarEvent[] = calendarEvents
-          .map((event: any) => {
-            const startTime = event.start?.dateTime || event.start?.date;
-            if (!startTime) return null;
-            
-            const start = new Date(startTime);
-            const end = new Date(event.end?.dateTime || event.end?.date || startTime);
-            const duration = Math.round((end.getTime() - start.getTime()) / (1000 * 60));
-            
-            const timeStr = start.toLocaleTimeString('en-US', { 
-              hour: '2-digit', 
-              minute: '2-digit', 
-              hour12: false 
-            });
+          return {
+            id: event.id,
+            title: summary,
+            time: timeStr,
+            duration,
+            type,
+            color: "",
+            startDate: start,
+            endDate: end,
+          };
+        })
+        .filter((e): e is CalendarEvent => e !== null)
+        .sort((a, b) => a.time.localeCompare(b.time));
 
-            const summary = event.summary || 'Untitled Event';
-            const lowerSummary = summary.toLowerCase();
-            let type: CalendarEvent['type'] = "meeting";
-            
-            if (lowerSummary.includes('class') || lowerSummary.includes('course') || lowerSummary.includes('lecture')) {
-              type = "class";
-            } else if (lowerSummary.includes('study') || lowerSummary.includes('homework') || lowerSummary.includes('assignment')) {
-              type = "study";
-            } else if (lowerSummary.includes('gym') || lowerSummary.includes('workout') || lowerSummary.includes('exercise')) {
-              type = "workout";
-            } else if (lowerSummary.includes('coffee') || lowerSummary.includes('networking') || lowerSummary.includes('chat')) {
-              type = "networking";
-            } else if (lowerSummary.includes('recruiting') || lowerSummary.includes('interview') || lowerSummary.includes('info session')) {
-              type = "recruiting";
-            }
-
-            return {
-              id: event.id,
-              title: summary,
-              time: timeStr,
-              duration,
-              type,
-              color: "",
-              startDate: start,
-              endDate: end,
-            };
-          })
-          .filter((e): e is CalendarEvent => e !== null)
-          .sort((a, b) => a.time.localeCompare(b.time));
-
-        setLoadedEvents(parsedEvents);
-      } catch (error) {
-        console.error('Error loading today\'s events:', error);
-      }
+      setEvents(parsedEvents);
     };
 
-    if (connected) {
-      loadTodayEvents();
-    }
-  }, [connected, callTool, connect]);
+    loadTodayEvents();
+  }, [fetchEvents, getEvents]);
 
   // Get current time-based greeting
   const currentHour = new Date().getHours();
@@ -209,8 +174,6 @@ export function CommandCenter({ events: propEvents = [], userFocus }: CommandCen
     focus = "Academic Focus";
   } else if (eventTypes.recruiting) {
     focus = "Professional Development";
-  } else if (eventTypes.networking) {
-    focus = "Networking & Connections";
   }
 
   // Generate contextual description
