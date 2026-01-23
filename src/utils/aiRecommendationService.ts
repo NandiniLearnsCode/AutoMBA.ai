@@ -1,10 +1,14 @@
 import { getOpenAIApiKey } from "@/config/apiKey";
 import { getToday } from "./dateUtils";
 import { startOfDay, endOfDay, format } from "date-fns";
+import {
+  retrieveRelevantDocuments,
+  formatDocumentsForPrompt,
+} from "@/services/documentService";
 
 export interface AIRecommendation {
   id: string;
-  type: "buffer" | "urgency" | "shift" | "optimization" | "alert";
+  type: "buffer" | "optimization" | "shift" | "alert";
   title: string;
   description: string;
   action: {
@@ -30,17 +34,10 @@ interface CalendarEvent {
 
 /**
  * Generate AI-powered recommendations based on today's calendar
+ * Uses RAG (Retrieval Augmented Generation) to include relevant document context
  */
 export async function generateAIRecommendations(
-  events: CalendarEvent[],
-  assignments?: Array<{
-    id: string;
-    title: string;
-    course: string;
-    dueDate: string;
-    priority: string;
-    progress: number;
-  }>
+  events: CalendarEvent[]
 ): Promise<AIRecommendation[]> {
   const apiKey = getOpenAIApiKey();
   if (!apiKey) {
@@ -52,21 +49,16 @@ export async function generateAIRecommendations(
     const today = getToday();
     const todayStr = format(today, "EEEE, MMMM d, yyyy");
     
-    // Format events for AI context
+    // Format events for AI context with timing details
+    const now = new Date();
     const eventsContext = events
-      .map((e) => `- ${e.title} (${e.time}, ${e.duration}min, ${e.type})`)
+      .map((e) => {
+        const timeUntil = Math.round((e.startDate.getTime() - now.getTime()) / (1000 * 60));
+        const status = timeUntil < 0 ? "past" : timeUntil < 60 ? "starting soon" : timeUntil < 180 ? "upcoming" : "later";
+        return `- ${e.title} (${e.time}, ${e.duration}min, ${e.type}) - ${status}`;
+      })
       .join("\n");
 
-    const assignmentsContext = assignments
-      ? assignments
-          .map(
-            (a) =>
-              `- ${a.title} (${a.course}): Due ${a.dueDate}, ${a.progress}% complete, Priority: ${a.priority}`
-          )
-          .join("\n")
-      : "No assignments data available";
-
-    const now = new Date();
     const currentTime = now.toLocaleTimeString('en-US', { 
       hour: '2-digit', 
       minute: '2-digit', 
@@ -74,6 +66,36 @@ export async function generateAIRecommendations(
     });
     const dayOfWeek = format(today, "EEEE");
     const isWeekend = today.getDay() === 0 || today.getDay() === 6;
+    const hourOfDay = now.getHours();
+    const timeOfDay = hourOfDay < 12 ? "morning" : hourOfDay < 17 ? "afternoon" : "evening";
+    
+    // Calculate gaps between events
+    const sortedEvents = [...events].sort((a, b) => a.startDate.getTime() - b.startDate.getTime());
+    const gaps: Array<{ before: string; after: string; minutes: number }> = [];
+    for (let i = 0; i < sortedEvents.length - 1; i++) {
+      const gap = Math.round((sortedEvents[i + 1].startDate.getTime() - sortedEvents[i].endDate.getTime()) / (1000 * 60));
+      if (gap >= 0 && gap < 60) {
+        gaps.push({
+          before: sortedEvents[i].title,
+          after: sortedEvents[i + 1].title,
+          minutes: gap
+        });
+      }
+    }
+    
+    const gapsContext = gaps.length > 0 
+      ? gaps.map(g => `- ${g.before} → ${g.after}: ${g.minutes}min gap`).join("\n")
+      : "No tight gaps detected";
+    
+    // RAG: Retrieve relevant documents based on today's schedule and context
+    const query = `Today's schedule: ${events.map(e => e.title).join(", ")}. Time: ${currentTime}. Day: ${dayOfWeek}.`;
+    let documentContext = "";
+    try {
+      const relevantDocs = await retrieveRelevantDocuments(query, apiKey, 3);
+      documentContext = formatDocumentsForPrompt(relevantDocs);
+    } catch (ragError) {
+      console.warn("RAG retrieval failed, continuing without document context:", ragError);
+    }
     
     const systemPrompt = `You are Kaisey, an AI assistant helping MBA students optimize their schedules.
 
@@ -139,7 +161,7 @@ Be specific with times, event names, and actions. Reference the current time and
           { role: "system", content: systemPrompt },
           {
             role: "user",
-            content: `Generate contextually-aware recommendations for ${todayStr} at ${currentTime}. Analyze the schedule and provide specific, actionable suggestions for optimizing, adding, or adjusting events. Consider the time of day and what makes sense for right now.`,
+            content: `Generate day-specific recommendations for ${todayStr} at ${currentTime}. Focus on what the user needs for TODAY - missing buffers, prep time, breaks, or optimizations. Analyze the schedule and provide 2-4 actionable suggestions that matter RIGHT NOW for today's remaining schedule.${documentContext ? " Use the provided document context to inform your recommendations." : ""}`,
           },
         ],
         temperature: 0.7,

@@ -13,6 +13,7 @@ import {
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/app/components/ui/card";
 import { Separator } from "@/app/components/ui/separator";
 import { Alert, AlertDescription } from "@/app/components/ui/alert";
+import { DocumentManager } from "./DocumentManager";
 
 interface SettingsProps {
   open?: boolean;
@@ -60,7 +61,7 @@ export function Settings({ open, onOpenChange }: SettingsProps) {
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-full sm:max-w-md overflow-y-auto">
+      <SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
         <SheetHeader>
           <SheetTitle className="flex items-center gap-2">
             <SettingsIcon className="w-5 h-5" />
@@ -152,6 +153,11 @@ export function Settings({ open, onOpenChange }: SettingsProps) {
               )}
             </CardContent>
           </Card>
+
+          <Separator />
+
+          {/* Document Management Section */}
+          <DocumentManager />
 
           <Separator />
 

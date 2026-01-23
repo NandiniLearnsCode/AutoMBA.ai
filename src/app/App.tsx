@@ -121,37 +121,8 @@ function AppContent() {
           })
           .filter((e: any) => e !== null);
 
-        // Load assignments with system date awareness
-        const tomorrow = new Date(today);
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        const dayAfterTomorrow = new Date(today);
-        dayAfterTomorrow.setDate(dayAfterTomorrow.getDate() + 2);
-        
-        const formatDateForDisplay = (date: Date) => {
-          return format(date, "MMM d, h:mm a");
-        };
-        
-        const assignments = [
-          { 
-            id: "1", 
-            title: "Valuation Case Study", 
-            course: "Corporate Finance", 
-            dueDate: `Tomorrow, ${formatDateForDisplay(tomorrow)}`, 
-            priority: "high", 
-            progress: 35 
-          },
-          { 
-            id: "5", 
-            title: "Operations Group Project", 
-            course: "Operations Management", 
-            dueDate: formatDateForDisplay(dayAfterTomorrow), 
-            priority: "high", 
-            progress: 20 
-          },
-        ];
-
-        // Generate AI recommendations
-        const aiRecs = await generateAIRecommendations(eventsForAI, assignments);
+        // Generate AI recommendations (with RAG - uses document context if available)
+        const aiRecs = await generateAIRecommendations(eventsForAI);
         
         // Convert AI recommendations to suggestion format
         const formattedSuggestions = aiRecs.map((rec) => ({
