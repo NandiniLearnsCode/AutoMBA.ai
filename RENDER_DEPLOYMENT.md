@@ -45,19 +45,24 @@ pm start
 
 ## Step 3: Deploy Frontend Service
 
-1. In Render dashboard, click **"New +"** → **"Static Site"**
+1. In Render dashboard, click **"New +"** → **"Web Service"**
 2. Connect the same GitHub repository
 3. Configure the frontend service:
    - **Name**: utomba-frontend (or your preferred name)
-   - **Build Command**: 
-pm install && npm run build
-   - **Publish Directory**: dist
+   - **Environment**: `Node`
+   - **Build Command**: `npm install && npm run build`
+   - **Start Command**: `npm run start:frontend`
+   - **Root Directory**: Leave empty (or set to root if needed)
 
 4. Set the following environment variables:
-   - VITE_CALENDAR_MCP_URL = https://your-backend-service-name.onrender.com/mcp
-   - VITE_GOOGLE_MAPS_API_KEY = Your Google Maps API key (if using Maps features)
+   - `NODE_ENV` = `production`
+   - `PORT` = `10000` (Render will override this, but set it as default)
+   - `VITE_CALENDAR_MCP_URL` = `https://your-backend-service-name.onrender.com/mcp`
+   - `VITE_GOOGLE_MAPS_API_KEY` = Your Google Maps API key (if using Maps features)
 
-5. Click **"Create Static Site"**
+5. Click **"Create Web Service"**
+
+**Note**: The frontend server automatically handles SPA routing (serves `index.html` for all routes), which fixes the "Cannot GET /" error.
 
 ## Step 4: Update Frontend Environment Variable
 
@@ -92,8 +97,10 @@ After the backend is deployed, update the frontend's VITE_CALENDAR_MCP_URL envir
 
 ### Frontend Issues
 
+- **Cannot GET /** or **White Screen**: The frontend server automatically handles SPA routing. Ensure `npm run start:frontend` is used as the start command.
 - **Cannot Connect to Backend**: Check VITE_CALENDAR_MCP_URL is set correctly
 - **Build Failures**: Ensure all dependencies are in package.json (not just devDependencies)
+- **404 Errors**: The frontend server serves `index.html` for all routes, so this should not occur
 
 ### Common Environment Variable Mistakes
 
@@ -103,12 +110,15 @@ After the backend is deployed, update the frontend's VITE_CALENDAR_MCP_URL envir
 
 ## Using render.yaml (Alternative Method)
 
-If you prefer using ender.yaml for infrastructure as code:
+If you prefer using 
+ender.yaml for infrastructure as code:
 
-1. The ender.yaml file is already created in your repository
+1. The 
+ender.yaml file is already created in your repository
 2. In Render dashboard, go to **"New +"** → **"Blueprint"**
 3. Connect your repository
-4. Render will automatically detect and use ender.yaml
+4. Render will automatically detect and use 
+ender.yaml
 5. You'll still need to set environment variables manually in Render dashboard
 
 ## Notes

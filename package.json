@@ -8,7 +8,8 @@
  			 "dev": "vite",
  			 "dev:server": "node server/mcp-calendar-server.js",
   			 "dev:all": "concurrently \"npm run dev:server\" \"npm run dev\"",
-  			 "start": "node server/mcp-calendar-server.js"
+  			 "start": "node server/mcp-calendar-server.js",
+  			 "start:frontend": "node server/frontend-server.js"
 		},
     "dependencies":  {
                          "@dnd-kit/core":  "^6.3.1",
