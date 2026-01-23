@@ -52,7 +52,7 @@ let calendar = null;
 function initializeOAuth2() {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const redirectUri = process.env.GOOGLE_REDIRECT_URI || ${BASE_URL}/oauth2callback;
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI || `${BASE_URL}/oauth2callback`;
 
   if (!clientId || !clientSecret) {
     console.warn('Google OAuth credentials not found in environment variables');
@@ -333,12 +333,12 @@ app.post('/mcp', async (req, res) => {
             break;
 
           default:
-            throw new Error(Unknown tool: );
+            throw new Error(`Unknown tool: ${name}`);
         }
         break;
 
       default:
-        throw new Error(Unknown method: );
+        throw new Error(`Unknown method: ${method}`);
     }
 
     res.json({
