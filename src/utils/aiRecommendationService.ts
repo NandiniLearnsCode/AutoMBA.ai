@@ -91,10 +91,16 @@ export async function generateAIRecommendations(
     const query = `Today's schedule: ${events.map(e => e.title).join(", ")}. Time: ${currentTime}. Day: ${dayOfWeek}.`;
     let documentContext = "";
     try {
+      console.log("[AI Recommendations] Starting RAG retrieval...");
       const relevantDocs = await retrieveRelevantDocuments(query, apiKey, 3);
       documentContext = formatDocumentsForPrompt(relevantDocs);
+      if (documentContext) {
+        console.log("[AI Recommendations] Document context retrieved and added to prompt");
+      } else {
+        console.log("[AI Recommendations] No relevant documents found for this query");
+      }
     } catch (ragError) {
-      console.warn("RAG retrieval failed, continuing without document context:", ragError);
+      console.warn("[AI Recommendations] RAG retrieval failed, continuing without document context:", ragError);
     }
     
     const systemPrompt = `You are Kaisey, an AI assistant helping MBA students optimize their schedules.

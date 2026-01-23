@@ -138,14 +138,17 @@ export async function retrieveRelevantDocuments(
       const queryEmbedding = await generateEmbedding(query, apiKey);
       
       // Get or generate embeddings for documents
+      console.log(`[RAG] Generating/checking embeddings for ${documents.length} documents...`);
       const documentsWithEmbeddings = await Promise.all(
         documents.map(async (doc) => {
           if (!doc.embedding) {
+            console.log(`[RAG] Generating embedding for document: "${doc.title}"`);
             // Generate embedding for document
             const embedding = await generateEmbedding(
               `${doc.title}\n\n${doc.content}`,
               apiKey
             );
+            console.log(`[RAG] Embedding generated for "${doc.title}" (${embedding.length} dimensions)`);
             
             // Save embedding to document
             const docs = getDocuments();
@@ -153,25 +156,36 @@ export async function retrieveRelevantDocuments(
             if (index !== -1) {
               docs[index].embedding = embedding;
               localStorage.setItem(DOCUMENTS_STORAGE_KEY, JSON.stringify(docs));
+              console.log(`[RAG] Embedding saved for "${doc.title}"`);
             }
             
             return { ...doc, embedding };
+          } else {
+            console.log(`[RAG] Using existing embedding for "${doc.title}"`);
           }
           return doc;
         })
       );
       
+      console.log(`[RAG] Generating query embedding for: "${query.substring(0, 100)}..."`);
+      
       // Calculate similarity scores
       const scored = documentsWithEmbeddings
-        .map((doc) => ({
-          document: doc,
-          relevance: doc.embedding
+        .map((doc) => {
+          const relevance = doc.embedding
             ? cosineSimilarity(queryEmbedding, doc.embedding)
-            : 0,
-        }))
+            : 0;
+          return {
+            document: doc,
+            relevance,
+          };
+        })
         .filter((item) => item.relevance > 0.1) // Filter low relevance
         .sort((a, b) => b.relevance - a.relevance)
         .slice(0, topK);
+      
+      console.log(`[RAG] Found ${scored.length} relevant documents:`, 
+        scored.map(s => `"${s.document.title}" (relevance: ${s.relevance.toFixed(3)})`));
       
       return scored;
     } catch (error) {
