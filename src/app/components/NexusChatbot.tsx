@@ -416,6 +416,110 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
     return suggestions;
   }, []);
 
+  // Helper function to find available time slots based on activity type and existing events
+  const findAvailableTimeSlots = useCallback((
+    activityType: string,
+    existingEvents: ParsedEvent[],
+    targetDate: Date,
+    durationMinutes: number = 60
+  ): { time: string; label: string }[] => {
+    const slots: { time: string; label: string }[] = [];
+    const lowerActivity = activityType.toLowerCase();
+
+    // Define preferred time ranges based on activity type
+    let preferredRanges: { start: number; end: number; label: string }[] = [];
+
+    if (/dinner|supper|evening meal/i.test(lowerActivity)) {
+      preferredRanges = [
+        { start: 18, end: 21, label: "Evening" },
+        { start: 19, end: 22, label: "Late Evening" },
+      ];
+    } else if (/lunch|midday meal/i.test(lowerActivity)) {
+      preferredRanges = [
+        { start: 11, end: 14, label: "Midday" },
+        { start: 12, end: 15, label: "Afternoon" },
+      ];
+    } else if (/breakfast|morning meal/i.test(lowerActivity)) {
+      preferredRanges = [
+        { start: 7, end: 10, label: "Morning" },
+        { start: 8, end: 11, label: "Late Morning" },
+      ];
+    } else if (/gym|workout|exercise|fitness|run|jog/i.test(lowerActivity)) {
+      preferredRanges = [
+        { start: 6, end: 9, label: "Early Morning" },
+        { start: 17, end: 20, label: "Evening" },
+        { start: 12, end: 14, label: "Lunch Break" },
+      ];
+    } else if (/study|homework|assignment|reading/i.test(lowerActivity)) {
+      preferredRanges = [
+        { start: 9, end: 12, label: "Morning" },
+        { start: 14, end: 17, label: "Afternoon" },
+        { start: 19, end: 22, label: "Evening" },
+      ];
+    } else if (/meeting|call|interview/i.test(lowerActivity)) {
+      preferredRanges = [
+        { start: 9, end: 12, label: "Morning" },
+        { start: 13, end: 17, label: "Afternoon" },
+      ];
+    } else if (/coffee|tea|break/i.test(lowerActivity)) {
+      preferredRanges = [
+        { start: 10, end: 11, label: "Mid-Morning" },
+        { start: 15, end: 16, label: "Afternoon" },
+      ];
+    } else {
+      // Default: business hours
+      preferredRanges = [
+        { start: 9, end: 12, label: "Morning" },
+        { start: 13, end: 17, label: "Afternoon" },
+        { start: 18, end: 21, label: "Evening" },
+      ];
+    }
+
+    // Get busy times for the target date
+    const targetDateStr = format(targetDate, 'yyyy-MM-dd');
+    const busySlots = existingEvents
+      .filter(e => e.startDate && format(e.startDate, 'yyyy-MM-dd') === targetDateStr)
+      .map(e => ({
+        start: e.startDate.getHours() * 60 + e.startDate.getMinutes(),
+        end: (e.endDate || e.startDate).getHours() * 60 + (e.endDate || e.startDate).getMinutes() + (e.endDate ? 0 : e.duration),
+      }));
+
+    // Find available slots in preferred ranges
+    for (const range of preferredRanges) {
+      // Check each 30-minute interval in the range
+      for (let hour = range.start; hour < range.end; hour++) {
+        for (const minute of [0, 30]) {
+          const slotStart = hour * 60 + minute;
+          const slotEnd = slotStart + durationMinutes;
+
+          // Skip if slot extends beyond the range
+          if (slotEnd > range.end * 60) continue;
+
+          // Check if slot conflicts with any existing event
+          const hasConflict = busySlots.some(busy =>
+            (slotStart < busy.end && slotEnd > busy.start)
+          );
+
+          if (!hasConflict) {
+            const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+            const displayTime = format(new Date(2000, 0, 1, hour, minute), 'h:mm a');
+            slots.push({
+              time: timeStr,
+              label: `${displayTime} (${range.label})`,
+            });
+
+            // Only add a few slots per range
+            if (slots.filter(s => s.label.includes(range.label)).length >= 2) break;
+          }
+        }
+        if (slots.filter(s => s.label.includes(range.label)).length >= 2) break;
+      }
+    }
+
+    // Limit to top 3 suggestions
+    return slots.slice(0, 3);
+  }, []);
+
   const scrollToBottom = () => {
     // Use setTimeout to ensure DOM is updated
     setTimeout(() => {
@@ -778,11 +882,33 @@ ${calendarContextText}
 
           if (conflictingEvent) {
             console.log('[Chatbot] Auto-execute: Conflict detected with:', conflictingEvent.title);
-            // Don't auto-execute, show conflict message instead
+
+            // Find alternative time slots based on the activity type
+            const durationMinutes = Math.round((eventDetails.end.getTime() - eventDetails.start.getTime()) / (1000 * 60));
+            const alternativeSlots = findAvailableTimeSlots(
+              eventDetails.title,
+              eventsArray,
+              eventDetails.start,
+              durationMinutes
+            );
+
+            // Build suggestion message with alternatives
+            let suggestionText = `I can't add "${eventDetails.title}" at ${format(eventDetails.start, 'h:mm a')} because you already have "${conflictingEvent.title}" scheduled at that time.`;
+
+            if (alternativeSlots.length > 0) {
+              suggestionText += `\n\n**Available time slots for ${eventDetails.title}:**\n`;
+              alternativeSlots.forEach((slot, index) => {
+                suggestionText += `${index + 1}. ${slot.label}\n`;
+              });
+              suggestionText += `\nJust say something like "schedule it at ${alternativeSlots[0].label.split(' (')[0]}" to book one of these times.`;
+            } else {
+              suggestionText += ` Please specify a different time.`;
+            }
+
             const conflictMessage: Message = {
               id: messageId,
               type: "agent",
-              content: `I can't add "${eventDetails.title}" at ${format(eventDetails.start, 'h:mm a')} because you already have "${conflictingEvent.title}" scheduled at that time. Please specify a different time.`,
+              content: suggestionText,
               timestamp: new Date(),
             };
             setMessages((prev) => [...prev, conflictMessage]);
@@ -1134,8 +1260,8 @@ ${dayReferences.map(d => `- ${d}`).join('\n')}
 
 Current time: ${currentHour}:00
 
-**Existing calendar events:**
-${busyTimes.length > 0 ? busyTimes.map(e => `- ${e.title} on ${e.date} (${e.dayName}) at ${e.time}`).join('\n') : 'No events scheduled'}
+**Existing calendar events (AVOID scheduling conflicts with these):**
+${busyTimes.length > 0 ? busyTimes.map(e => `- ${e.title} on ${e.date} (${e.dayName}) at ${e.time} for ${e.duration} minutes`).join('\n') : 'No events scheduled'}
 
 **Instructions:**
 1. Extract a clear, concise event TITLE (e.g., "Dinner", "Gym Session", "Study Time")
@@ -1146,11 +1272,29 @@ ${busyTimes.length > 0 ? busyTimes.map(e => `- ${e.title} on ${e.date} (${e.dayN
    - If user says "Monday", "Tuesday", etc., use the corresponding date from DATE REFERENCE
    - If user specifies a specific date like "January 25" or "1/25", use that date
    - Default to today (${todayStr}) only if no date/day is mentioned
-3. Determine the TIME:
+3. Determine the TIME (IMPORTANT - be context-aware):
    - If user specifies a time (e.g., "at 3pm", "at 15:00"), use it exactly
    - Convert 12-hour to 24-hour format (3pm = 15:00, 9am = 09:00)
-   - If no time specified, pick a reasonable time (morning activities: 09:00, lunch: 12:00, dinner: 18:00, evening: 19:00)
-4. Determine DURATION (default 60 minutes unless specified)
+   - **If NO time specified, use these CONTEXT-AWARE defaults based on activity type:**
+     * Breakfast/morning meal: 08:00-09:00
+     * Gym/workout/exercise/run: 07:00 (morning) or 18:00 (evening)
+     * Lunch/midday meal: 12:00-13:00
+     * Coffee/tea break: 10:00 or 15:00
+     * Study/homework/reading: 09:00 (morning), 14:00 (afternoon), or 19:00 (evening)
+     * Meeting/call/interview: 10:00 or 14:00 (business hours)
+     * Dinner/supper/evening meal: 18:00-19:00
+     * Drinks/happy hour/bar: 18:00-19:00
+     * Movie/entertainment: 19:00-20:00
+     * Generic events: 10:00 (if morning context) or 14:00 (default)
+   - **CRITICAL: Check existing events and pick a time that does NOT conflict!**
+   - If the preferred time conflicts, shift by 30-60 minutes to find an open slot
+4. Determine DURATION based on activity type:
+   - Meals (breakfast/lunch/dinner): 60-90 minutes
+   - Gym/workout: 60-90 minutes
+   - Coffee/break: 30 minutes
+   - Study session: 60-120 minutes
+   - Meeting: 60 minutes
+   - Default: 60 minutes
 
 Return ONLY this JSON format, no other text:
 {"title": "Event Name", "date": "YYYY-MM-DD", "time": "HH:MM", "durationMinutes": 60}`;
