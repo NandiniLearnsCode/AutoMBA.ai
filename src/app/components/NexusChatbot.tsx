@@ -649,15 +649,22 @@ ${calendarContextText}
       // Enhanced intent parsing for scheduling keywords
       const lowerInput = messageToSend.toLowerCase();
 
+      // Check for QUERY intent first - these should NOT trigger any calendar actions
+      // Queries are asking about the schedule, not modifying it
+      const hasQueryIntent = /\b(what('s| is| are)?|show|tell|list|summarize|summary|overview|how many|do i have|am i free|any(thing)?|events?( on| for| today| tomorrow| this| next)?)\b.*\b(schedule|calendar|events?|appointments?|plans?|busy|free|today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week)\b/i.test(messageToSend) ||
+        /\b(schedule|calendar|events?|plans?)\b.*\b(for|on|today|tomorrow|this|next)\b/i.test(messageToSend) && !/\b(add|create|schedule|book|set up|block)\b.*\b(for|at|on)\b/i.test(messageToSend) ||
+        /^(what|show|tell|list|summarize|how|do i|am i|any)/i.test(messageToSend.trim());
+
       // Check for specific scheduling intents - expanded to include more common phrases
-      const hasScheduleIntent = /schedule|block time|study for|add .* (at|to|for)|create .* (at|to|for)|put .* (at|on|in)|book|set up/i.test(messageToSend);
+      // BUT exclude if it's a query intent
+      const hasScheduleIntent = !hasQueryIntent && /\b(schedule|block time|study for)\b|add .* (at|to|for)|create .* (at|to|for)|put .* (at|on|in)|book|set up/i.test(messageToSend);
       const hasInsteadOfIntent = /instead of|replace/i.test(messageToSend);
       const hasDeleteIntent = /delete|cancel|remove|clear/i.test(messageToSend) &&
         !/don't delete|don't cancel|don't remove/i.test(messageToSend);
-      const hasMoveIntent = /move|reschedule|shift|change.*(time|to \d)|push.*(to|back|forward)|edit|update|modify/i.test(messageToSend) &&
+      const hasMoveIntent = !hasQueryIntent && /move|reschedule|shift|change.*(time|to \d)|push.*(to|back|forward)|edit|update|modify/i.test(messageToSend) &&
         !/don't move|don't reschedule|don't change/i.test(messageToSend);
 
-      console.log('[Chatbot] Intent detection:', { hasScheduleIntent, hasInsteadOfIntent, hasDeleteIntent, hasMoveIntent, lowerInput });
+      console.log('[Chatbot] Intent detection:', { hasQueryIntent, hasScheduleIntent, hasInsteadOfIntent, hasDeleteIntent, hasMoveIntent, lowerInput });
       
       // More conservative detection - only mark as action if it's proposing a specific action
       const actionPatterns = {
@@ -668,7 +675,8 @@ ${calendarContextText}
       };
       
       // Determine if this is a simple addition (low-stakes) or complex operation (requires approval)
-      const isSimpleAddition = hasScheduleIntent && !hasInsteadOfIntent && 
+      // NEVER treat query intents as additions
+      const isSimpleAddition = !hasQueryIntent && hasScheduleIntent && !hasInsteadOfIntent &&
         !/(?:move|reschedule|shift|cancel|delete|replace|instead)/i.test(messageToSend);
       
       // Determine if this is a delete request
@@ -678,9 +686,16 @@ ${calendarContextText}
       const impactsHardBlocks = /(?:class|meeting|interview|exam|deadline)/i.test(messageToSend) ||
         actionPatterns.move.test(lowerResponse) || actionPatterns.cancel.test(lowerResponse);
 
+      // PRIORITY 0: Query intent - user is asking about their schedule, NOT modifying it
+      // These should never trigger any actions - just show the AI response
+      if (hasQueryIntent) {
+        actionType = undefined;
+        actionDetails = undefined;
+        console.log('[Chatbot] User has QUERY intent - no action needed, just showing AI response');
+      }
       // PRIORITY 1: Check user's explicit intent first (these take precedence)
       // User's delete intent should NOT be overridden by AI response patterns
-      if (hasDeleteIntent) {
+      else if (hasDeleteIntent) {
         actionType = "cancel";
         actionDetails = "Delete event";
         console.log('[Chatbot] User has explicit DELETE intent');
@@ -698,7 +713,8 @@ ${calendarContextText}
         console.log('[Chatbot] User has explicit ADD intent');
       }
       // PRIORITY 2: Only check AI response patterns if user intent wasn't clear
-      else {
+      // But NEVER for queries
+      else if (!hasQueryIntent) {
         if (actionPatterns.move.test(lowerResponse)) {
           actionType = "move";
           actionDetails = "Schedule adjustment";
@@ -715,12 +731,16 @@ ${calendarContextText}
       }
 
       // For simple additions or deletions, auto-execute without approval
-      const shouldAutoExecute = (isSimpleAddition && actionType === "add" && !impactsHardBlocks) ||
-        (isSimpleDeletion && actionType === "cancel");
+      // NEVER auto-execute for query intents
+      const shouldAutoExecute = !hasQueryIntent && (
+        (isSimpleAddition && actionType === "add" && !impactsHardBlocks) ||
+        (isSimpleDeletion && actionType === "cancel")
+      );
 
       console.log('[Chatbot] Action detection result:', {
         actionType,
         actionDetails,
+        hasQueryIntent,
         isSimpleAddition,
         isSimpleDeletion,
         hasDeleteIntent,
