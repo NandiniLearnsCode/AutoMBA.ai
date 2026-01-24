@@ -62,12 +62,13 @@ export const ChatInputCard = forwardRef<{ focus: () => void }, ChatInputCardProp
       return () => clearInterval(interval);
     }, []);
 
-    // Scroll to bottom when messages change
+    // Scroll to bottom when messages change (only when expanded)
     useEffect(() => {
-      if (messagesEndRef.current) {
-        messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+      if (isExpanded && messagesEndRef.current) {
+        // Use block: 'nearest' to only scroll the chat container, not the page
+        messagesEndRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
       }
-    }, [messages, isTyping]);
+    }, [messages, isTyping, isExpanded]);
 
     // Load calendar and generate suggestions when expanded
     useEffect(() => {
