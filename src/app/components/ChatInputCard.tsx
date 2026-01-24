@@ -32,7 +32,7 @@ interface Message {
  */
 export const ChatInputCard = forwardRef<{ focus: () => void }, ChatInputCardProps>(
   ({ onSendMessage }, ref) => {
-    const [isExpanded, setIsExpanded] = useState(false);
+    const [isExpanded, setIsExpanded] = useState(true); // Open by default
     const [inputValue, setInputValue] = useState("");
     const [messages, setMessages] = useState<Message[]>([]);
     const [isTyping, setIsTyping] = useState(false);
