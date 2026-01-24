@@ -434,7 +434,7 @@ export function TimelineView({ selectedDate, onDateChange }: TimelineViewProps =
         </div>
       </div>
 
-      {(calendarError || mcpError) && (
+      {(calendarError || (mcpError && !connected)) && (
         <div className="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20">
           <p className="text-sm text-red-600">{calendarError || mcpError}</p>
         </div>
