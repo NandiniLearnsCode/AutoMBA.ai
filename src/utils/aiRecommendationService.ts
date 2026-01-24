@@ -1,6 +1,7 @@
 import { getOpenAIApiKey, OPENAI_CHAT_MODEL } from "@/config/apiKey";
 import { getToday } from "./dateUtils";
 import { startOfDay, endOfDay, format } from "date-fns";
+import { searchRelevantChunks, formatChunksForPrompt } from "./ragService";
 
 export interface AIRecommendation {
   id: string;
@@ -88,6 +89,27 @@ export async function generateAIRecommendations(
     });
     const dayOfWeek = format(today, "EEEE");
     const isWeekend = today.getDay() === 0 || today.getDay() === 6;
+    const currentMonth = today.getMonth();
+
+    // RAG: Get relevant playbook knowledge for recommendations
+    let playbookKnowledge = '';
+    try {
+      const eventTypes = events.map(e => e.type);
+      const relevantChunks = await searchRelevantChunks(
+        "schedule optimization recommendations MBA student day planning",
+        2,
+        {
+          currentMonth,
+          priorities: userPriorities?.map(p => p.id),
+          recentEventTypes: [...new Set(eventTypes)],
+        }
+      );
+      if (relevantChunks.length > 0) {
+        playbookKnowledge = '\n\n' + formatChunksForPrompt(relevantChunks);
+      }
+    } catch (ragError) {
+      console.warn('[Recommendations] RAG search failed:', ragError);
+    }
 
     const systemPrompt = `You are Kaisey, an AI assistant helping MBA students optimize their schedules.
 
@@ -114,6 +136,7 @@ ${eventsContext || "No events scheduled"}
 
 **Assignments:**
 ${assignmentsContext}
+${playbookKnowledge}
 
 **Your Task:**
 Analyze the schedule and generate 2-5 actionable recommendations. Be contextually aware:

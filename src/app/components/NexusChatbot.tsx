@@ -13,6 +13,7 @@ import { useMcpServer } from "@/hooks/useMcpServer";
 import { useCalendar } from "@/contexts/CalendarContext";
 import { format, startOfWeek, endOfWeek, addDays, addWeeks, addMonths, startOfDay, endOfDay, startOfMonth, endOfMonth } from "date-fns";
 import { getToday } from "@/utils/dateUtils";
+import { searchRelevantChunks, formatChunksForPrompt, initializeEmbeddings } from "@/utils/ragService";
 
 // ParsedEvent type (matching the format from googleCalendar.ts)
 interface ParsedEvent {
@@ -373,6 +374,13 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, onPr
     }
   }, []);
 
+  // Initialize RAG embeddings on mount (async, non-blocking)
+  useEffect(() => {
+    initializeEmbeddings().catch(error => {
+      console.warn('[Chatbot] RAG initialization failed (will retry on first query):', error);
+    });
+  }, []);
+
   // Keep messagesRef in sync with messages state for reliable access in callbacks
   useEffect(() => {
     messagesRef.current = messages;
@@ -550,9 +558,10 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, onPr
   }, [isOpen]);
 
   const callOpenAI = async (
-    userMessage: string, 
+    userMessage: string,
     conversationHistory: Array<{role: string, content: string}>,
-    calendarContext?: ParsedEvent[]
+    calendarContext?: ParsedEvent[],
+    userPriorities?: string[]
   ): Promise<string> => {
     const apiKey = getOpenAIApiKey();
     if (!apiKey) {
@@ -561,6 +570,25 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, onPr
 
     const today = getToday();
     const todayStr = format(today, 'EEEE, MMMM d, yyyy');
+    const currentMonth = today.getMonth();
+
+    // RAG: Search for relevant playbook knowledge
+    let playbookKnowledge = '';
+    try {
+      const recentEventTypes = calendarContext?.slice(0, 5).map(e => e.type) || [];
+      const relevantChunks = await searchRelevantChunks(userMessage, 3, {
+        currentMonth,
+        priorities: userPriorities,
+        recentEventTypes: [...new Set(recentEventTypes)],
+      });
+
+      if (relevantChunks.length > 0) {
+        playbookKnowledge = '\n\n' + formatChunksForPrompt(relevantChunks);
+        console.log('[Chatbot] RAG: Found', relevantChunks.length, 'relevant playbook chunks');
+      }
+    } catch (ragError) {
+      console.warn('[Chatbot] RAG search failed, continuing without playbook knowledge:', ragError);
+    }
 
     let calendarContextText = '';
     if (calendarContext && calendarContext.length > 0) {
@@ -605,13 +633,17 @@ ${formattedEvents}
 1. Answer questions about the user's schedule (using ONLY the calendar data provided below)
 2. Help add, move, or remove calendar events
 3. Have friendly conversations about anything
+4. Provide strategic MBA advice based on the kAIsey Protocol playbook
 
 **Core Principles:**
 - Be concise and conversational
+- Act as a Chief of Staff - direct, strategic, empathetic but firm
+- Use MBA vernacular when appropriate (ROI, bandwidth, opportunity cost, MECE)
 - When discussing schedule, ONLY mention events that are explicitly listed in the calendar data below
 - If no events are listed, say so honestly - do NOT invent fake events
 - Not every message needs a scheduling action - sometimes users just want to chat or ask questions
 ${calendarContextText}
+${playbookKnowledge}
 
 **When the user asks about their schedule:**
 - Look at the CALENDAR EVENTS section above
@@ -621,6 +653,12 @@ ${calendarContextText}
 **When the user wants to add/schedule something:**
 - Acknowledge the request and confirm what you'll add
 - Be helpful about suggesting times if they don't specify one
+- Consider event tier priorities from the playbook (Tier 1 > Tier 2 > Tier 3 > Tier 4)
+
+**When giving advice:**
+- Reference the MBA Playbook concepts when relevant (event tiers, recruiting phases, FOMO filter, etc.)
+- Consider the current recruiting phase based on the month
+- Factor in biometric/recovery concerns if the user mentions being tired or exhausted
 
 **NEVER:**
 - Invent or hallucinate events that aren't in the calendar data
@@ -749,9 +787,14 @@ ${calendarContextText}
       const eventsArray = Array.isArray(relevantEvents) ? relevantEvents : [];
       console.log('[Chatbot] Passing', eventsArray.length, 'events to callOpenAI');
 
-      // Call OpenAI API with calendar context and session state
+      // Call OpenAI API with calendar context, session state, and RAG playbook knowledge
       const userMessageWithContext = messageToSend + sessionContext;
-      const aiResponse = await callOpenAI(userMessageWithContext, conversationHistory, eventsArray.length > 0 ? eventsArray : undefined);
+      const aiResponse = await callOpenAI(
+        userMessageWithContext,
+        conversationHistory,
+        eventsArray.length > 0 ? eventsArray : undefined,
+        undefined // priorities - could be passed as prop in future
+      );
 
       // Parse response to determine if it's an action or regular message
       // Only mark as action if it's clearly proposing a concrete, actionable change
