@@ -50,7 +50,7 @@ interface Message {
   content: string;
   timestamp: Date;
   action?: {
-    type: "move" | "cancel" | "add" | "suggest";
+    type: "move" | "cancel" | "add" | "suggest" | "priority-change";
     details: string;
     status: "pending" | "approved" | "rejected" | "auto-executed";
     userRequest?: string; // Store the original user request for parsing
@@ -59,16 +59,21 @@ interface Message {
     eventId?: string; // For undo functionality
     priority?: "hard-block" | "flexible" | "optional"; // Hard Block vs Nice to Have
     googleCalendarLink?: string; // Deep link to Google Calendar event
+    newPriorityOrder?: string[]; // For priority-change actions
   };
 }
+
+// Priority types matching PriorityRanking component
+type PriorityType = "recruiting" | "socials" | "sleep" | "clubs" | "homework";
 
 interface NexusChatbotProps {
   onScheduleChange?: (action: string, details: any) => void;
   onSendMessageFromExternal?: (message: string) => void;
+  onPriorityChange?: (newOrder: string[]) => void; // Callback for priority changes
   isHidden?: boolean; // For inline chat mode
 }
 
-export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHidden = false }: NexusChatbotProps) {
+export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, onPriorityChange, isHidden = false }: NexusChatbotProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState("");
@@ -753,22 +758,72 @@ ${calendarContextText}
       // Enhanced intent parsing for scheduling keywords
       const lowerInput = messageToSend.toLowerCase();
 
+      // Check for PRIORITY CHANGE intent - user wants to change their priorities
+      const hasPriorityChangeIntent = /\b(priorit(y|ies|ize)|focus|more important|most important|top priority|main focus|care more about|care less about|prefer|emphasis)\b/i.test(messageToSend) &&
+        /\b(recruiting|socials?|sleep|clubs?|homework|assignments?|networking|rest|study|studies|career|job|interview|party|parties|health|wellness)\b/i.test(messageToSend);
+
       // Check for QUERY intent first - these should NOT trigger any calendar actions
       // Queries are asking about the schedule, not modifying it
-      const hasQueryIntent = /\b(what('s| is| are)?|show|tell|list|summarize|summary|overview|how many|do i have|am i free|any(thing)?|events?( on| for| today| tomorrow| this| next)?)\b.*\b(schedule|calendar|events?|appointments?|plans?|busy|free|today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week)\b/i.test(messageToSend) ||
+      const hasQueryIntent = !hasPriorityChangeIntent && (
+        /\b(what('s| is| are)?|show|tell|list|summarize|summary|overview|how many|do i have|am i free|any(thing)?|events?( on| for| today| tomorrow| this| next)?)\b.*\b(schedule|calendar|events?|appointments?|plans?|busy|free|today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week)\b/i.test(messageToSend) ||
         /\b(schedule|calendar|events?|plans?)\b.*\b(for|on|today|tomorrow|this|next)\b/i.test(messageToSend) && !/\b(add|create|schedule|book|set up|block)\b.*\b(for|at|on)\b/i.test(messageToSend) ||
-        /^(what|show|tell|list|summarize|how|do i|am i|any)/i.test(messageToSend.trim());
+        /^(what|show|tell|list|summarize|how|do i|am i|any)/i.test(messageToSend.trim())
+      );
 
       // Check for specific scheduling intents - expanded to include more common phrases
-      // BUT exclude if it's a query intent
-      const hasScheduleIntent = !hasQueryIntent && /\b(schedule|block time|study for)\b|add .* (at|to|for)|create .* (at|to|for)|put .* (at|on|in)|book|set up/i.test(messageToSend);
+      // BUT exclude if it's a query intent or priority change intent
+      const hasScheduleIntent = !hasQueryIntent && !hasPriorityChangeIntent && /\b(schedule|block time|study for)\b|add .* (at|to|for)|create .* (at|to|for)|put .* (at|on|in)|book|set up/i.test(messageToSend);
       const hasInsteadOfIntent = /instead of|replace/i.test(messageToSend);
-      const hasDeleteIntent = /delete|cancel|remove|clear/i.test(messageToSend) &&
+      const hasDeleteIntent = !hasPriorityChangeIntent && /delete|cancel|remove|clear/i.test(messageToSend) &&
         !/don't delete|don't cancel|don't remove/i.test(messageToSend);
-      const hasMoveIntent = !hasQueryIntent && /move|reschedule|shift|change.*(time|to \d)|push.*(to|back|forward)|edit|update|modify/i.test(messageToSend) &&
+      const hasMoveIntent = !hasQueryIntent && !hasPriorityChangeIntent && /move|reschedule|shift|change.*(time|to \d)|push.*(to|back|forward)|edit|update|modify/i.test(messageToSend) &&
         !/don't move|don't reschedule|don't change/i.test(messageToSend);
 
-      console.log('[Chatbot] Intent detection:', { hasQueryIntent, hasScheduleIntent, hasInsteadOfIntent, hasDeleteIntent, hasMoveIntent, lowerInput });
+      console.log('[Chatbot] Intent detection:', { hasPriorityChangeIntent, hasQueryIntent, hasScheduleIntent, hasInsteadOfIntent, hasDeleteIntent, hasMoveIntent, lowerInput });
+
+      // Handle PRIORITY CHANGE intent - ask for approval before changing priorities
+      if (hasPriorityChangeIntent) {
+        console.log('[Chatbot] User has PRIORITY CHANGE intent');
+
+        // Use AI to determine the new priority order
+        const newPriorityOrder = await extractPriorityOrderWithAI(messageToSend);
+
+        if (newPriorityOrder && newPriorityOrder.length === 5) {
+          // Create a human-readable description of the change
+          const priorityLabels: Record<string, string> = {
+            recruiting: "Recruiting",
+            socials: "Socials",
+            sleep: "Sleep",
+            clubs: "Clubs",
+            homework: "Homework",
+          };
+
+          const newOrderLabels = newPriorityOrder.map((id, index) => `${index + 1}. ${priorityLabels[id] || id}`).join("\n");
+
+          const priorityChangeMessage: Message = {
+            id: messageId,
+            type: "action",
+            content: `I understand you want to change your priorities. Here's the new order I'll set:\n\n${newOrderLabels}\n\nWould you like me to update your priorities and regenerate recommendations based on this new order?`,
+            timestamp: new Date(),
+            action: {
+              type: "priority-change",
+              details: "Update priority order",
+              status: "pending",
+              userRequest: messageToSend,
+              newPriorityOrder: newPriorityOrder,
+            },
+          };
+
+          setMessages((prev) => [...prev, priorityChangeMessage]);
+          setIsTyping(false);
+          isProcessingRef.current = false;
+          currentMessageIdRef.current = null;
+          return;
+        } else {
+          // Couldn't determine new order, show AI response instead
+          console.log('[Chatbot] Could not determine new priority order, showing AI response');
+        }
+      }
       
       // More conservative detection - only mark as action if it's proposing a specific action
       const actionPatterns = {
@@ -1475,6 +1530,86 @@ If no match found, return: {"eventIndex": null}`;
     }
   };
 
+  // AI-powered priority extraction - uses LLM to determine new priority order from user request
+  const extractPriorityOrderWithAI = async (
+    userRequest: string
+  ): Promise<string[] | null> => {
+    const apiKey = getOpenAIApiKey();
+    if (!apiKey) return null;
+
+    const prompt = `Analyze the user's request and determine their new priority order for these 5 categories:
+- recruiting (job search, interviews, networking for career)
+- socials (parties, social events, friends)
+- sleep (rest, health, wellness)
+- clubs (student organizations, extracurriculars)
+- homework (assignments, studying, academics)
+
+User request: "${userRequest}"
+
+**Instructions:**
+1. Determine which category the user wants to prioritize MORE (move up in ranking)
+2. Determine which category the user wants to prioritize LESS (move down in ranking)
+3. Return a NEW ordering of all 5 categories based on the user's intent
+4. The default order is: recruiting, socials, sleep, clubs, homework
+5. If user says "focus on X" or "X is most important" - put X first
+6. If user says "care less about X" or "X is less important" - move X down
+7. Keep other items in relative order
+
+**Examples:**
+- "I want to focus more on sleep" → sleep should be #1
+- "recruiting is my top priority now" → recruiting should be #1
+- "I care less about socials, homework is more important" → homework up, socials down
+- "I need to prioritize clubs and homework over recruiting" → clubs, homework up, recruiting down
+
+Return ONLY a JSON array with the 5 category IDs in the new order, no other text:
+["first_priority", "second_priority", "third_priority", "fourth_priority", "fifth_priority"]`;
+
+    try {
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.2,
+          max_tokens: 100,
+        }),
+      });
+
+      if (!response.ok) return null;
+
+      const data = await response.json();
+      const content = data.choices[0]?.message?.content?.trim();
+
+      // Parse JSON array from response
+      const jsonMatch = content.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) return null;
+
+      const parsed = JSON.parse(jsonMatch[0]);
+
+      // Validate that all 5 priorities are present
+      const validPriorities = ["recruiting", "socials", "sleep", "clubs", "homework"];
+      if (!Array.isArray(parsed) || parsed.length !== 5) return null;
+
+      const allValid = parsed.every((p: string) => validPriorities.includes(p));
+      const allUnique = new Set(parsed).size === 5;
+
+      if (!allValid || !allUnique) {
+        console.error('[Chatbot] Invalid priority order from AI:', parsed);
+        return null;
+      }
+
+      console.log('[Chatbot] AI extracted new priority order:', parsed);
+      return parsed;
+    } catch (error) {
+      console.error('[Chatbot] AI priority extraction failed:', error);
+      return null;
+    }
+  };
+
   // AI-powered event finding for moving/rescheduling - uses LLM to find the best matching event
   const findEventToMoveWithAI = async (
     userRequest: string,
@@ -1679,14 +1814,61 @@ If no match found, return: {"eventIndex": null}`;
     if (message?.action) {
       console.log('[Chatbot] Executing action type:', message.action.type, 'userRequest:', message.action.userRequest);
       try {
-        // Ensure connected to MCP
+        // Handle priority-change action (doesn't need MCP connection)
+        if (message.action.type === "priority-change" && message.action.newPriorityOrder) {
+          console.log('[Chatbot] Executing priority change:', message.action.newPriorityOrder);
+
+          // Call the onPriorityChange callback if provided
+          if (onPriorityChange) {
+            onPriorityChange(message.action.newPriorityOrder);
+          }
+
+          // Also expose via window for components that use window-based communication
+          if ((window as any).__nexusChatbotOnPriorityChange) {
+            (window as any).__nexusChatbotOnPriorityChange(message.action.newPriorityOrder);
+          }
+
+          // Show success message
+          const priorityLabels: Record<string, string> = {
+            recruiting: "Recruiting",
+            socials: "Socials",
+            sleep: "Sleep",
+            clubs: "Clubs",
+            homework: "Homework",
+          };
+          const newOrderText = message.action.newPriorityOrder
+            .map((id, index) => `${index + 1}. ${priorityLabels[id] || id}`)
+            .join(", ");
+
+          setTimeout(() => {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: Date.now().toString(),
+                type: "agent",
+                content: `Great! I've updated your priorities to: ${newOrderText}. Your recommendations will now be tailored to focus on your top priorities.`,
+                timestamp: new Date(),
+              },
+            ]);
+          }, 500);
+
+          // Import toast for notification
+          const { toast: toastFn } = await import("sonner");
+          toastFn.success("Priorities updated!", {
+            description: `Now focusing on: ${priorityLabels[message.action.newPriorityOrder[0]]}`,
+          });
+
+          return; // Priority change handled, exit early
+        }
+
+        // Ensure connected to MCP for calendar operations
         if (!connected) {
           await connect();
         }
-        
+
         let createdEventId: string | undefined;
         let googleCalendarLink: string | undefined;
-        
+
         // Execute calendar operation based on action type
         if (message.action.type === "add" && message.action.userRequest) {
           // First try AI extraction which is smarter about understanding context
@@ -2027,6 +2209,7 @@ If no match found, return: {"eventIndex": null}`;
     (window as any).__nexusChatbotHandleApprove = handleApproveAction;
     (window as any).__nexusChatbotHandleReject = handleRejectAction;
     (window as any).__nexusChatbotGenerateSuggestions = generateInitialSuggestions;
+    (window as any).__nexusChatbotOnPriorityChange = onPriorityChange;
     (window as any).__nexusChatbotGenerateProactiveRecommendations = async () => {
       // Generate proactive recommendations when chat opens
       try {
@@ -2075,6 +2258,7 @@ If no match found, return: {"eventIndex": null}`;
       delete (window as any).__nexusChatbotHandleReject;
       delete (window as any).__nexusChatbotGenerateSuggestions;
       delete (window as any).__nexusChatbotGenerateProactiveRecommendations;
+      delete (window as any).__nexusChatbotOnPriorityChange;
     };
   }, [messages, isTyping, loadCalendarEvents, generateInitialSuggestions, generatePersonalizedGreeting, sessionState]);
 

@@ -1,5 +1,5 @@
 import { useState, useRef, useImperativeHandle, forwardRef, useEffect } from "react";
-import { MessageSquare, Send, X, Brain, Check, Clock, Calendar, Sparkles, ChevronDown, ChevronUp, RefreshCw, ExternalLink } from "lucide-react";
+import { MessageSquare, Send, X, Brain, Check, Clock, Calendar, Sparkles, ChevronDown, ChevronUp, RefreshCw, ExternalLink, ListOrdered } from "lucide-react";
 import { Card } from "@/app/components/ui/card";
 import { Input } from "@/app/components/ui/input";
 import { Button } from "@/app/components/ui/button";
@@ -322,7 +322,8 @@ export const ChatInputCard = forwardRef<{ focus: () => void }, ChatInputCardProp
                                 {message.action?.type === "cancel" && <X className="w-3 h-3 mr-1" />}
                                 {message.action?.type === "add" && <Calendar className="w-3 h-3 mr-1" />}
                                 {message.action?.type === "suggest" && <Sparkles className="w-3 h-3 mr-1" />}
-                                {message.action?.type}
+                                {message.action?.type === "priority-change" && <ListOrdered className="w-3 h-3 mr-1" />}
+                                {message.action?.type === "priority-change" ? "Update Priorities" : message.action?.type}
                               </Badge>
                             </div>
                             <div className="text-sm prose prose-sm max-w-none dark:prose-invert mb-2">

@@ -183,6 +183,31 @@ function AppContent() {
     }
   };
 
+  // Handle priority changes from chatbot
+  const handleChatbotPriorityChange = async (newPriorityIds: string[]) => {
+    // Convert priority IDs to PriorityItem objects
+    const priorityLabels: Record<string, { label: string; icon: string }> = {
+      recruiting: { label: "Recruiting", icon: "💼" },
+      socials: { label: "Socials", icon: "🎉" },
+      sleep: { label: "Sleep", icon: "😴" },
+      clubs: { label: "Clubs", icon: "👥" },
+      homework: { label: "Homework", icon: "📚" },
+    };
+
+    const newPriorities: PriorityItem[] = newPriorityIds.map((id) => ({
+      id: id as PriorityItem["id"],
+      label: priorityLabels[id]?.label || id,
+      icon: priorityLabels[id]?.icon || "📌",
+    }));
+
+    // Update priorities state (this will update the UI)
+    setPriorities(newPriorities);
+    setLastPrioritiesJson(JSON.stringify(newPriorityIds));
+
+    // Regenerate recommendations with new priorities
+    await generateRecommendations(newPriorities);
+  };
+
   const handleAcceptSuggestion = async (id: string, suggestionData?: {
     assignmentId?: string;
     eventId?: string;
@@ -415,8 +440,9 @@ function AppContent() {
       <Toaster />
 
       {/* Hidden Nexus Chatbot (preserves all backend logic) */}
-      <NexusChatbot 
+      <NexusChatbot
         onScheduleChange={handleScheduleChange}
+        onPriorityChange={handleChatbotPriorityChange}
         isHidden={true} // Hidden - using inline ChatInputCard instead
       />
     </div>
