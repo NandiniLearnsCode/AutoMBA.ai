@@ -239,11 +239,23 @@ function MonthView({ timeBlocks, currentDate, typeConfig }: { timeBlocks: TimeBl
   );
 }
 
-export function TimelineView() {
+interface TimelineViewProps {
+  selectedDate?: Date;
+  onDateChange?: (date: Date) => void;
+}
+
+export function TimelineView({ selectedDate, onDateChange }: TimelineViewProps = {}) {
   const [view, setView] = useState<"day" | "week" | "month">("day");
-  const [currentDate, setCurrentDate] = useState(() => getToday());
+  const [internalDate, setInternalDate] = useState(() => getToday());
   const { loading: calendarLoading, error: calendarError, getEvents, fetchEvents } = useCalendar();
   const { connected, loading: mcpLoading, error: mcpError, callTool, connect } = useMcpServer('google-calendar');
+
+  // Use controlled date if provided, otherwise use internal state
+  const currentDate = selectedDate || internalDate;
+  const setCurrentDate = (date: Date) => {
+    setInternalDate(date);
+    onDateChange?.(date);
+  };
 
   const sensors = useSensors(
     useSensor(PointerSensor, {

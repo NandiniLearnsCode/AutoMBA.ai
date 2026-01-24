@@ -25,7 +25,10 @@ import { PriorityRanking, defaultPriorities, PriorityItem } from "@/app/componen
 function AppContent() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const chatbotRef = useRef<{ handleSendMessage: (message: string) => void } | null>(null);
-  
+
+  // Shared selected date state for CommandCenter and TimelineView
+  const [selectedDate, setSelectedDate] = useState(() => getToday());
+
   // AI-generated recommendations
   const [suggestions, setSuggestions] = useState<
     Array<{
@@ -315,7 +318,7 @@ function AppContent() {
       {/* Main Content - Single Column Vertical Feed */}
       <main className="max-w-4xl mx-auto px-6 py-6 space-y-6">
         {/* Hero Section: Day at a Glance */}
-        <CommandCenter />
+        <CommandCenter selectedDate={selectedDate} />
 
         {/* Priority Ranking */}
         <div className="space-y-2">
@@ -379,7 +382,7 @@ function AppContent() {
         )}
 
         {/* Calendar: Timeline View */}
-        <TimelineView />
+        <TimelineView selectedDate={selectedDate} onDateChange={setSelectedDate} />
 
         {/* Canvas Assignments */}
         <AssignmentGrid />

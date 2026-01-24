@@ -1,7 +1,7 @@
 import { Sparkles, Target, Zap, Calendar } from "lucide-react";
 import { Card } from "@/app/components/ui/card";
 import { Badge } from "@/app/components/ui/badge";
-import { format, startOfDay, endOfDay } from "date-fns";
+import { format, startOfDay, endOfDay, isToday } from "date-fns";
 import { getToday } from "@/utils/dateUtils";
 import { useMcpServer } from "@/hooks/useMcpServer";
 import { useEffect, useState } from "react";
@@ -20,26 +20,29 @@ interface CalendarEvent {
 
 interface CommandCenterProps {
   userFocus?: string | null;
+  selectedDate?: Date;
 }
 
-export function CommandCenter({ userFocus }: CommandCenterProps) {
+export function CommandCenter({ userFocus, selectedDate }: CommandCenterProps) {
   const { connected, callTool, connect } = useMcpServer('google-calendar');
   const { events: contextEvents, getEvents, fetchEvents, loading: calendarLoading } = useCalendar();
   const [events, setEvents] = useState<CalendarEvent[]>([]);
 
-  // Load today's events from calendar on mount
+  // Use selectedDate prop or default to today
+  const displayDate = selectedDate || getToday();
+  const isDisplayingToday = isToday(displayDate);
+
+  // Load events for the selected date
   useEffect(() => {
-    const today = getToday();
-    const dayStart = startOfDay(today);
-    const dayEnd = endOfDay(today);
+    const dayStart = startOfDay(displayDate);
+    const dayEnd = endOfDay(displayDate);
     fetchEvents(dayStart, dayEnd);
-  }, [fetchEvents]);
+  }, [fetchEvents, displayDate]);
 
   // Update local events when CalendarContext events change
   useEffect(() => {
-    const today = getToday();
-    const dayStart = startOfDay(today);
-    const dayEnd = endOfDay(today);
+    const dayStart = startOfDay(displayDate);
+    const dayEnd = endOfDay(displayDate);
     const fetchedEvents = getEvents(dayStart, dayEnd);
 
     // Convert to CalendarEvent format
@@ -109,18 +112,19 @@ export function CommandCenter({ userFocus }: CommandCenterProps) {
   const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
   const upcomingEvent = events.find(event => event.time > currentTime) || events[0];
   
-  // Generate contextual description of today's schedule
+  // Generate contextual description of the day's schedule
+  const dayLabel = isDisplayingToday ? "today" : format(displayDate, 'EEEE');
   const generateScheduleDescription = (): string => {
     if (totalEvents === 0) {
-      return "You have a free day today. Perfect opportunity to catch up on assignments or schedule networking meetings.";
+      return `You have a free day ${isDisplayingToday ? 'today' : 'on ' + format(displayDate, 'EEEE')}. Perfect opportunity to catch up on assignments or schedule networking meetings.`;
     }
 
     const sortedEvents = [...events].sort((a, b) => a.time.localeCompare(b.time));
     const firstEvent = sortedEvents[0];
     const lastEvent = sortedEvents[sortedEvents.length - 1];
-    
-    let description = `Your day starts at ${firstEvent.time} with "${firstEvent.title}"`;
-    
+
+    let description = `${isDisplayingToday ? 'Your day starts' : format(displayDate, 'EEEE') + ' starts'} at ${firstEvent.time} with "${firstEvent.title}"`;
+
     if (totalEvents > 1) {
       description += ` and wraps up at ${lastEvent.time} with "${lastEvent.title}". `;
     } else {
@@ -129,14 +133,14 @@ export function CommandCenter({ userFocus }: CommandCenterProps) {
 
     // Add context based on event types
     if (eventTypes.class && eventTypes.class >= 2) {
-      description += `You have ${eventTypes.class} classes today, so focus on academic preparation. `;
+      description += `You have ${eventTypes.class} classes ${dayLabel}, so focus on academic preparation. `;
     }
-    
+
     if (eventTypes.networking || eventTypes.recruiting) {
       const networkingTotal = (eventTypes.networking || 0) + (eventTypes.recruiting || 0);
       description += `${networkingTotal} networking event${networkingTotal > 1 ? 's' : ''} ${networkingTotal > 1 ? 'are' : 'is'} scheduled - great for building connections. `;
     }
-    
+
     if (eventTypes.workout) {
       description += `You've scheduled ${eventTypes.workout} workout${eventTypes.workout > 1 ? 's' : ''} - maintaining your wellness routine. `;
     }
@@ -149,7 +153,7 @@ export function CommandCenter({ userFocus }: CommandCenterProps) {
       const currentEnd = new Date(current.startDate || new Date());
       currentEnd.setMinutes(currentEnd.getMinutes() + current.duration);
       const nextStart = new Date(next.startDate || new Date());
-      
+
       const bufferMinutes = (nextStart.getTime() - currentEnd.getTime()) / (1000 * 60);
       if (bufferMinutes < 15 && bufferMinutes >= 0) {
         hasTightSchedule = true;
@@ -186,11 +190,11 @@ export function CommandCenter({ userFocus }: CommandCenterProps) {
   const networkingCount = (eventTypes.networking || 0) + (eventTypes.recruiting || 0);
   
   let message = `${greeting}, Star MBA Student! `;
-  
+
   if (totalEvents > 0) {
     message += scheduleDescription;
   } else {
-    message += "You have a free day today. Perfect opportunity to catch up on assignments or schedule networking meetings.";
+    message += `You have a free day ${isDisplayingToday ? 'today' : 'on ' + format(displayDate, 'EEEE')}. Perfect opportunity to catch up on assignments or schedule networking meetings.`;
   }
 
   return (
@@ -202,22 +206,22 @@ export function CommandCenter({ userFocus }: CommandCenterProps) {
       
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-4">
-            <h2 className="text-xl font-bold">Your Day at a Glance</h2>
+            <h2 className="text-xl font-bold">{isDisplayingToday ? "Your Day at a Glance" : format(displayDate, 'EEEE') + " at a Glance"}</h2>
             <Badge className="bg-blue-500 text-white shrink-0">
               <Calendar className="w-3 h-3 mr-1" />
-              {format(getToday(), 'EEEE, MMM d')}
+              {format(displayDate, 'EEEE, MMM d')}
             </Badge>
           </div>
-        
+
           <p className="text-sm mb-4 leading-relaxed">
             {message}
           </p>
-          
+
           <div className="flex items-start gap-6">
             <div className="flex items-start gap-2">
               <Target className="w-4 h-4 text-blue-500 mt-0.5 shrink-0" />
               <div>
-                <div className="text-xs text-muted-foreground">Today's Focus</div>
+                <div className="text-xs text-muted-foreground">{isDisplayingToday ? "Today's Focus" : format(displayDate, 'EEEE') + "'s Focus"}</div>
                 <div className="text-sm font-semibold">{focus}</div>
               </div>
             </div>
