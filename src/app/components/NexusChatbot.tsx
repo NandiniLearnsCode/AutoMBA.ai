@@ -224,20 +224,25 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
   };
 
   // Parse date references from user input (tomorrow, next week, Monday, etc.)
+  // Returns a date range that includes the target date and provides context
   const parseDateFromInput = (userInput: string): { startDate: Date; endDate: Date } => {
     const lower = userInput.toLowerCase();
     const today = getToday(); // Use actual system date
     let targetDate = new Date(today);
-    
+    let useWeekRange = false;
+
     // Check for specific date references
     if (lower.includes('tomorrow')) {
       targetDate = addDays(today, 1);
     } else if (lower.includes('next week')) {
       targetDate = addWeeks(startOfWeek(today, { weekStartsOn: 1 }), 1);
+      useWeekRange = true;
     } else if (lower.includes('this week')) {
       targetDate = startOfWeek(today, { weekStartsOn: 1 });
+      useWeekRange = true;
     } else if (lower.includes('next month')) {
       targetDate = addMonths(today, 1);
+      useWeekRange = true; // Load the first week of next month
     } else {
       // Check for day names (Monday, Tuesday, etc.)
       const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
@@ -252,19 +257,28 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
         }
       }
     }
-    
-    // Default to current week for broader context
-    if (targetDate.getTime() === today.getTime()) {
+
+    // If no specific date mentioned, load the current week for context
+    if (targetDate.getTime() === today.getTime() && !lower.includes('today')) {
       return {
         startDate: startOfWeek(today, { weekStartsOn: 1 }),
         endDate: endOfWeek(today, { weekStartsOn: 1 }),
       };
     }
-    
-    // Return date range for the target date
+
+    // For week-based queries, return the full week
+    if (useWeekRange) {
+      return {
+        startDate: startOfWeek(targetDate, { weekStartsOn: 1 }),
+        endDate: endOfWeek(targetDate, { weekStartsOn: 1 }),
+      };
+    }
+
+    // For specific day queries, load that day plus surrounding context (3 days before and after)
+    // This helps the AI understand the broader schedule context
     return {
-      startDate: startOfDay(targetDate),
-      endDate: endOfDay(targetDate),
+      startDate: startOfDay(addDays(targetDate, -1)),
+      endDate: endOfDay(addDays(targetDate, 1)),
     };
   };
 
@@ -431,40 +445,73 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
       throw new Error("OpenAI API key not found. Please set VITE_OPENAI_API_KEY environment variable.");
     }
 
+    const today = getToday();
+    const todayStr = format(today, 'EEEE, MMMM d, yyyy');
+
     let calendarContextText = '';
     if (calendarContext && calendarContext.length > 0) {
       // Format events with full date/time information
       const formattedEvents = calendarContext.map(e => {
-        const dateStr = e.startDate ? format(e.startDate, 'EEE, MMM d') : 'Unknown date';
-        return `- ${e.title} on ${dateStr} at ${e.time} (${e.duration}min, ${e.type})`;
+        const dateStr = e.startDate ? format(e.startDate, 'EEE, MMM d, yyyy') : 'Unknown date';
+        return `- "${e.title}" on ${dateStr} at ${e.time} (${e.duration}min, type: ${e.type})`;
       }).join('\n');
 
-      calendarContextText = `\n\nCALENDAR EVENTS (from Google Calendar):\n${formattedEvents}\n\nIMPORTANT: These are the ACTUAL events from the user's Google Calendar. Use this information to answer questions about their schedule. Do NOT make up or hallucinate events that are not listed above.`;
+      calendarContextText = `
+
+**TODAY'S DATE: ${todayStr}**
+
+**USER'S CALENDAR EVENTS (from Google Calendar):**
+${formattedEvents}
+
+**CRITICAL RULES:**
+1. ONLY reference events that are listed above. Do NOT invent, guess, or hallucinate any events.
+2. If asked about the schedule and no events are listed, say "You don't have any events scheduled for that time period."
+3. When answering questions about the schedule, be accurate and reference the exact event names and times shown above.
+4. You can have normal conversations too - not every message is about scheduling.`;
 
       console.log('[Chatbot] Calendar context for AI:', formattedEvents);
     } else {
+      calendarContextText = `
+
+**TODAY'S DATE: ${todayStr}**
+
+**USER'S CALENDAR:** No events found for the requested time period.
+
+**CRITICAL RULES:**
+1. Do NOT make up or hallucinate any events. The user has no events scheduled.
+2. If asked about schedule, honestly say there are no events scheduled.
+3. You can have normal conversations - not every message is about scheduling.`;
+
       console.log('[Chatbot] No calendar events to provide context');
     }
 
-    const systemPrompt = `You are Kaisey, an AI assistant helping MBA students optimize their schedules.
+    const systemPrompt = `You are Kaisey, a friendly AI assistant for MBA students. You help with scheduling but can also have normal conversations.
+
+**Your Capabilities:**
+1. Answer questions about the user's schedule (using ONLY the calendar data provided below)
+2. Help add, move, or remove calendar events
+3. Have friendly conversations about anything
 
 **Core Principles:**
-- Be concise: Start with 1-2 sentence summary, then provide details only if needed
-- Be actionable: Suggest specific changes with clear reasoning
-- Be conversational: Use friendly, natural language (e.g., "Hey!" instead of "Good morning")
-- Remember context: ALWAYS maintain awareness of the current calendar state. If you just updated the calendar, reference the new state directly without asking the user to re-list events.
-
-**Response Format:**
-1. **Summary** (1-2 sentences): High-level recommendation
-2. **Details** (if needed): Specific changes in a bulleted list
-3. **Reasoning** (if needed): Brief explanation of tradeoffs
-
+- Be concise and conversational
+- When discussing schedule, ONLY mention events that are explicitly listed in the calendar data below
+- If no events are listed, say so honestly - do NOT invent fake events
+- Not every message needs a scheduling action - sometimes users just want to chat or ask questions
 ${calendarContextText}
 
-**When suggesting actions:** 
-- For simple additions (dinner, casual meetings, personal events): Just do it and confirm. Don't ask for approval or provide lengthy reasoning.
-- For complex moves that impact hard blocks (classes, interviews, exams): Explain the impact and ask for approval.
-- NEVER ask the user to "provide your schedule" or "list your events" if you have access to calendar data or just updated it. Use the calendar context provided.`;
+**When the user asks about their schedule:**
+- Look at the CALENDAR EVENTS section above
+- Only mention events that are actually listed there
+- If the time period has no events, say "You don't have anything scheduled for [time period]"
+
+**When the user wants to add/schedule something:**
+- Acknowledge the request and confirm what you'll add
+- Be helpful about suggesting times if they don't specify one
+
+**NEVER:**
+- Invent or hallucinate events that aren't in the calendar data
+- Ask users to "list their events" when you already have calendar data
+- Make up event names like random mixers, meetings, or activities that don't exist`;
 
     try {
       const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -480,7 +527,7 @@ ${calendarContextText}
             ...conversationHistory,
             { role: "user", content: userMessage },
           ],
-          temperature: 0.7,
+          temperature: 0.4, // Reduced for more factual, less creative responses
           max_tokens: 500,
         }),
       });
@@ -973,64 +1020,60 @@ ${calendarContextText}
 
     const today = getToday();
     const todayStr = format(today, 'yyyy-MM-dd');
+    const todayDayName = format(today, 'EEEE');
     const currentHour = new Date().getHours();
 
-    // Build a list of busy times from calendar events
+    // Pre-compute common date references to help the AI
+    const tomorrow = addDays(today, 1);
+    const tomorrowStr = format(tomorrow, 'yyyy-MM-dd');
+
+    // Compute day names for the next 7 days
+    const dayReferences: string[] = [];
+    for (let i = 0; i < 7; i++) {
+      const futureDate = addDays(today, i);
+      const dayName = format(futureDate, 'EEEE');
+      const dateStr = format(futureDate, 'yyyy-MM-dd');
+      dayReferences.push(`${dayName} = ${dateStr}`);
+    }
+
+    // Build a list of busy times from calendar events (all events, not just today)
     const busyTimes = calendarEvents
       .filter(e => e.startDate && !isNaN(e.startDate.getTime()))
       .map(e => ({
         title: e.title,
         time: e.time,
         duration: e.duration,
-        date: format(e.startDate, 'yyyy-MM-dd')
+        date: format(e.startDate, 'yyyy-MM-dd'),
+        dayName: format(e.startDate, 'EEEE')
       }));
-
-    // Find free slots for today (simple approach: gaps between events)
-    const todayEvents = calendarEvents
-      .filter(e => {
-        if (!e.startDate || isNaN(e.startDate.getTime())) return false;
-        return format(e.startDate, 'yyyy-MM-dd') === todayStr;
-      })
-      .sort((a, b) => a.startDate.getTime() - b.startDate.getTime());
-
-    let freeSlots: string[] = [];
-    if (todayEvents.length === 0) {
-      freeSlots = ['Most of the day is free'];
-    } else {
-      // Check gaps between events
-      let lastEnd = Math.max(currentHour, 8); // Start from current hour or 8am
-      for (const event of todayEvents) {
-        const eventStart = parseInt(event.time.split(':')[0]);
-        if (eventStart > lastEnd + 1) {
-          freeSlots.push(`${lastEnd}:00 - ${eventStart}:00`);
-        }
-        const eventEnd = eventStart + Math.ceil(event.duration / 60);
-        lastEnd = Math.max(lastEnd, eventEnd);
-      }
-      if (lastEnd < 21) { // Before 9pm
-        freeSlots.push(`${lastEnd}:00 - 21:00`);
-      }
-    }
 
     const prompt = `Extract event details from the user's request. Return ONLY valid JSON.
 
 User request: "${userRequest}"
 
-Today's date: ${todayStr}
+**DATE REFERENCE (use these exact dates):**
+- Today: ${todayStr} (${todayDayName})
+- Tomorrow: ${tomorrowStr}
+${dayReferences.map(d => `- ${d}`).join('\n')}
+
 Current time: ${currentHour}:00
 
-Existing calendar events today:
-${busyTimes.length > 0 ? busyTimes.map(e => `- ${e.title} at ${e.time} (${e.duration}min)`).join('\n') : 'No events scheduled'}
+**Existing calendar events:**
+${busyTimes.length > 0 ? busyTimes.map(e => `- ${e.title} on ${e.date} (${e.dayName}) at ${e.time}`).join('\n') : 'No events scheduled'}
 
-Free time slots today: ${freeSlots.join(', ')}
-
-Instructions:
-1. Extract a clear, concise event TITLE (not the raw request, but a proper event name like "Dinner", "Gym Session", "Study Time", etc.)
-2. Determine the DATE (default to today unless specified otherwise like "tomorrow", "Monday", etc.)
+**Instructions:**
+1. Extract a clear, concise event TITLE (e.g., "Dinner", "Gym Session", "Study Time")
+2. Determine the DATE:
+   - Use the DATE REFERENCE above to convert day names to actual dates
+   - "tomorrow" = ${tomorrowStr}
+   - "today" = ${todayStr}
+   - If user says "Monday", "Tuesday", etc., use the corresponding date from DATE REFERENCE
+   - If user specifies a specific date like "January 25" or "1/25", use that date
+   - Default to today (${todayStr}) only if no date/day is mentioned
 3. Determine the TIME:
-   - If user specifies a time, use it
-   - If no time specified, pick a free slot that makes sense for the activity
-   - Avoid scheduling over existing events
+   - If user specifies a time (e.g., "at 3pm", "at 15:00"), use it exactly
+   - Convert 12-hour to 24-hour format (3pm = 15:00, 9am = 09:00)
+   - If no time specified, pick a reasonable time (morning activities: 09:00, lunch: 12:00, dinner: 18:00, evening: 19:00)
 4. Determine DURATION (default 60 minutes unless specified)
 
 Return ONLY this JSON format, no other text:
