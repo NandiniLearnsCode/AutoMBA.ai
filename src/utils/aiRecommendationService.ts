@@ -28,8 +28,14 @@ interface CalendarEvent {
   endDate: Date;
 }
 
+export interface UserPriority {
+  id: string;
+  label: string;
+  rank: number;
+}
+
 /**
- * Generate AI-powered recommendations based on today's calendar
+ * Generate AI-powered recommendations based on today's calendar and user priorities
  */
 export async function generateAIRecommendations(
   events: CalendarEvent[],
@@ -40,7 +46,8 @@ export async function generateAIRecommendations(
     dueDate: string;
     priority: string;
     progress: number;
-  }>
+  }>,
+  userPriorities?: UserPriority[]
 ): Promise<AIRecommendation[]> {
   const apiKey = getOpenAIApiKey();
   if (!apiKey) {
@@ -66,21 +73,41 @@ export async function generateAIRecommendations(
           .join("\n")
       : "No assignments data available";
 
+    // Format user priorities for AI context
+    const prioritiesContext = userPriorities && userPriorities.length > 0
+      ? userPriorities
+          .map((p) => `${p.rank}. ${p.label} (${p.id})`)
+          .join("\n")
+      : "1. Recruiting\n2. Socials\n3. Sleep\n4. Clubs\n5. Homework";
+
     const now = new Date();
-    const currentTime = now.toLocaleTimeString('en-US', { 
-      hour: '2-digit', 
-      minute: '2-digit', 
-      hour12: true 
+    const currentTime = now.toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
     });
     const dayOfWeek = format(today, "EEEE");
     const isWeekend = today.getDay() === 0 || today.getDay() === 6;
-    
+
     const systemPrompt = `You are Kaisey, an AI assistant helping MBA students optimize their schedules.
 
 **Current Context:**
 - Today is ${todayStr} (${dayOfWeek})
 - Current time: ${currentTime}
 - ${isWeekend ? 'Weekend - focus on rest, wellness, and catch-up work' : 'Weekday - prioritize classes, networking, and assignments'}
+
+**USER'S PRIORITY RANKING (CRITICAL - Use this to contextualize ALL recommendations):**
+${prioritiesContext}
+
+**How to use priorities:**
+- #1 priority is MOST important to the user - protect and optimize time for this
+- Lower ranked priorities can be shifted/reduced to make room for higher priorities
+- When suggesting new activities, favor those aligned with top priorities
+- When resolving conflicts, protect higher priority activities
+- Frame recommendations in terms of how they serve the user's top priorities
+- Example: If "Recruiting" is #1, suggest interview prep, networking events, resume time
+- Example: If "Sleep" is #1, avoid late-night suggestions, recommend earlier bedtimes
+- Example: If "Homework" is #1, suggest study blocks and assignment time
 
 **Today's Schedule:**
 ${eventsContext || "No events scheduled"}
@@ -90,17 +117,19 @@ ${assignmentsContext}
 
 **Your Task:**
 Analyze the schedule and generate 2-5 actionable recommendations. Be contextually aware:
+- **ALWAYS contextualize recommendations based on the user's priority ranking above**
 - If it's morning, suggest optimizations for the day ahead
 - If it's afternoon, focus on remaining time and evening prep
 - If it's evening, suggest tomorrow's prep or rest opportunities
 - Consider time of day for optimal scheduling (e.g., study blocks, workouts)
+- Rank your recommendations with higher priority activities first
 
-**Recommendation Types (prioritize these):**
+**Recommendation Types (prioritize based on user's ranking):**
 1. **BUFFER** - Events back-to-back with <15min gap (suggest adding buffer time or shifting)
 2. **URGENCY** - Assignments due within 48h with <50% completion (suggest study blocks)
 3. **SHIFT** - Non-critical events that could move to create better flow (suggest new time)
-4. **OPTIMIZATION** - Opportunities to add wellness, study, or networking time
-5. **ALERT** - Critical conflicts or missed opportunities
+4. **OPTIMIZATION** - Opportunities to add time for user's TOP priorities
+5. **ALERT** - Critical conflicts or missed opportunities for high-priority activities
 
 **For each recommendation, provide:**
 - Specific event names and times

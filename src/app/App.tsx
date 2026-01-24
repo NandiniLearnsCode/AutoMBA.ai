@@ -16,7 +16,7 @@ import { McpProvider } from "@/contexts/McpContext";
 import { CalendarProvider, useCalendar } from "@/contexts/CalendarContext";
 import { getMcpServerConfigs } from "@/config/mcpServers";
 import { toast } from "sonner";
-import { generateAIRecommendations, AIRecommendation } from "@/utils/aiRecommendationService";
+import { generateAIRecommendations, AIRecommendation, UserPriority } from "@/utils/aiRecommendationService";
 import { useMcpServer } from "@/hooks/useMcpServer";
 import { getToday } from "@/utils/dateUtils";
 import { startOfDay, endOfDay, format } from "date-fns";
@@ -43,14 +43,14 @@ function AppContent() {
   >([]);
   const [loadingRecommendations, setLoadingRecommendations] = useState(true);
   const [priorities, setPriorities] = useState<PriorityItem[]>(defaultPriorities);
-  
+  const [lastPrioritiesJson, setLastPrioritiesJson] = useState<string>(JSON.stringify(defaultPriorities.map(p => p.id)));
+
   // MCP server for calendar operations
   const { connected, callTool, connect } = useMcpServer('google-calendar');
   const { getEvents, fetchEvents } = useCalendar();
 
-  // Generate AI recommendations on mount
-  useEffect(() => {
-    const generateRecommendations = async () => {
+  // Function to generate recommendations (extracted for reuse)
+  const generateRecommendations = async (currentPriorities: PriorityItem[]) => {
       try {
         setLoadingRecommendations(true);
         const today = getToday();
@@ -127,9 +127,16 @@ function AppContent() {
           },
         ];
 
-        // Generate AI recommendations
-        const aiRecs = await generateAIRecommendations(eventsForAI, assignments);
-        
+        // Convert priorities to format expected by AI service
+        const userPriorities: UserPriority[] = currentPriorities.map((p, index) => ({
+          id: p.id,
+          label: p.label,
+          rank: index + 1,
+        }));
+
+        // Generate AI recommendations with user priorities
+        const aiRecs = await generateAIRecommendations(eventsForAI, assignments, userPriorities);
+
         // Convert AI recommendations to suggestion format
         const formattedSuggestions = aiRecs.map((rec) => ({
           id: rec.id,
@@ -149,10 +156,32 @@ function AppContent() {
       }
     };
 
-    generateRecommendations();
-    // Only run once on mount, or when explicitly triggered
+  // Generate AI recommendations on mount
+  useEffect(() => {
+    generateRecommendations(priorities);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Empty deps to prevent infinite loops
+  }, []); // Only run once on mount
+
+  // Handle priority changes - regenerate recommendations
+  const handlePrioritiesChange = async (newPriorities: PriorityItem[]) => {
+    setPriorities(newPriorities);
+
+    // Check if priorities actually changed (by comparing IDs order)
+    const newPrioritiesJson = JSON.stringify(newPriorities.map(p => p.id));
+    if (newPrioritiesJson !== lastPrioritiesJson) {
+      setLastPrioritiesJson(newPrioritiesJson);
+
+      // Show toast that recommendations are being updated
+      toast.info("Updating recommendations based on your new priorities...");
+
+      // Regenerate recommendations with new priorities
+      await generateRecommendations(newPriorities);
+
+      toast.success("Recommendations updated!", {
+        description: `Now prioritizing: ${newPriorities[0].label} > ${newPriorities[1].label} > ${newPriorities[2].label}`,
+      });
+    }
+  };
 
   const handleAcceptSuggestion = async (id: string, suggestionData?: {
     assignmentId?: string;
@@ -319,10 +348,7 @@ function AppContent() {
           </div>
           <PriorityRanking
             priorities={priorities}
-            onPrioritiesChange={(newPriorities) => {
-              setPriorities(newPriorities);
-              // TODO: Update recommendations based on new priorities
-            }}
+            onPrioritiesChange={handlePrioritiesChange}
           />
         </div>
 
