@@ -34,7 +34,7 @@ interface Message {
  */
 export const ChatInputCard = forwardRef<{ focus: () => void }, ChatInputCardProps>(
   ({ onSendMessage }, ref) => {
-    const [isExpanded, setIsExpanded] = useState(true); // Open by default
+    const [isExpanded, setIsExpanded] = useState(false); // Start collapsed
     const [inputValue, setInputValue] = useState("");
     const [messages, setMessages] = useState<Message[]>([]);
     const [isTyping, setIsTyping] = useState(false);
@@ -107,15 +107,18 @@ export const ChatInputCard = forwardRef<{ focus: () => void }, ChatInputCardProp
 
     const handleSubmit = () => {
       if (!inputValue.trim()) return;
-      
+
       const message = inputValue.trim();
       setInputValue("");
-      
+
+      // Auto-expand to show the response
+      setIsExpanded(true);
+
       // Call chatbot's send handler
       if ((window as any).__nexusChatbotSendMessage) {
         (window as any).__nexusChatbotSendMessage(message);
       }
-      
+
       // Also call parent's handler if provided
       if (onSendMessage) {
         onSendMessage(message);
