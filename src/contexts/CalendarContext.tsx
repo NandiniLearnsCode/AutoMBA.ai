@@ -54,7 +54,7 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
   const [events, setEvents] = useState<ParsedEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { connected, callTool, connect } = useMcpServer('google-calendar');
+  const { connected, callTool, connect, clearError: clearMcpError } = useMcpServer('google-calendar');
 
   // Caching and throttling to prevent quota exceeded errors
   const lastFetchRef = useRef<{ start: string; end: string; timestamp: number } | null>(null);
@@ -209,13 +209,16 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
         // Combine with the freshly fetched events
         return [...eventsOutsideRange, ...parsedEvents];
       });
+
+      // Clear any stale MCP errors after successful fetch
+      clearMcpError();
     } catch (err: any) {
       setError(err.message || 'Failed to fetch calendar events');
     } finally {
       setLoading(false);
       fetchInProgressRef.current = false;
     }
-  }, [connected, callTool, connect]);
+  }, [connected, callTool, connect, clearMcpError]);
 
   const getEvents = (startDate: Date, endDate: Date): ParsedEvent[] => {
     return events.filter(event => {
