@@ -652,10 +652,12 @@ ${calendarContextText}
       // Check for specific scheduling intents - expanded to include more common phrases
       const hasScheduleIntent = /schedule|block time|study for|add .* (at|to|for)|create .* (at|to|for)|put .* (at|on|in)|book|set up/i.test(messageToSend);
       const hasInsteadOfIntent = /instead of|replace/i.test(messageToSend);
-      const hasDeleteIntent = /delete|cancel|remove|clear/i.test(messageToSend) && 
+      const hasDeleteIntent = /delete|cancel|remove|clear/i.test(messageToSend) &&
         !/don't delete|don't cancel|don't remove/i.test(messageToSend);
+      const hasMoveIntent = /move|reschedule|shift|change.*(time|to \d)|push.*(to|back|forward)|edit|update|modify/i.test(messageToSend) &&
+        !/don't move|don't reschedule|don't change/i.test(messageToSend);
 
-      console.log('[Chatbot] Intent detection:', { hasScheduleIntent, hasInsteadOfIntent, hasDeleteIntent, lowerInput });
+      console.log('[Chatbot] Intent detection:', { hasScheduleIntent, hasInsteadOfIntent, hasDeleteIntent, hasMoveIntent, lowerInput });
       
       // More conservative detection - only mark as action if it's proposing a specific action
       const actionPatterns = {
@@ -683,7 +685,13 @@ ${calendarContextText}
         actionDetails = "Delete event";
         console.log('[Chatbot] User has explicit DELETE intent');
       }
-      // User's add intent (only if not deleting)
+      // User's move/reschedule intent
+      else if (hasMoveIntent && eventsArray.length > 0) {
+        actionType = "move";
+        actionDetails = "Reschedule event";
+        console.log('[Chatbot] User has explicit MOVE/RESCHEDULE intent');
+      }
+      // User's add intent (only if not deleting or moving)
       else if (hasScheduleIntent && !hasInsteadOfIntent) {
         actionType = "add";
         actionDetails = "Schedule event";
@@ -963,6 +971,18 @@ ${calendarContextText}
         if (eventToDelete) {
           foundEventId = eventToDelete.id;
           actionDetails = `Delete "${eventToDelete.title}"`;
+        }
+      }
+
+      // For move/reschedule actions, try to find the event ID
+      if (actionType === "move" && eventsArray.length > 0) {
+        const eventToMove = await findEventToMoveWithAI(messageToSend, eventsArray);
+        if (eventToMove) {
+          foundEventId = eventToMove.id;
+          actionDetails = `Reschedule "${eventToMove.title}"`;
+          console.log('[Chatbot] Found event to move:', eventToMove);
+        } else {
+          console.log('[Chatbot] Could not find event to move');
         }
       }
 
@@ -1267,6 +1287,93 @@ If no match found, return: {"eventIndex": null}`;
     }
   };
 
+  // AI-powered event finding for moving/rescheduling - uses LLM to find the best matching event
+  const findEventToMoveWithAI = async (
+    userRequest: string,
+    calendarEvents: ParsedEvent[]
+  ): Promise<{ id: string; title: string } | null> => {
+    const apiKey = getOpenAIApiKey();
+    if (!apiKey || calendarEvents.length === 0) return null;
+
+    const today = getToday();
+    const todayStr = format(today, 'yyyy-MM-dd');
+
+    // Build a list of events with their IDs
+    const eventsList = calendarEvents
+      .filter(e => e.startDate && !isNaN(e.startDate.getTime()))
+      .map((e, index) => ({
+        index,
+        id: e.id,
+        title: e.title,
+        time: e.time,
+        date: format(e.startDate, 'yyyy-MM-dd'),
+        duration: e.duration
+      }));
+
+    if (eventsList.length === 0) return null;
+
+    const prompt = `Find the event the user wants to move/reschedule/edit. Return ONLY valid JSON.
+
+User request: "${userRequest}"
+
+Today's date: ${todayStr}
+
+Available events:
+${eventsList.map((e, i) => `${i + 1}. "${e.title}" on ${e.date} at ${e.time} (ID: ${e.id})`).join('\n')}
+
+Instructions:
+1. Find the event that the user wants to move, reschedule, shift, change, or edit
+2. Match by event title, time, or date as described in the user's request
+3. Look for phrases like "move X to...", "reschedule X...", "change X time...", "shift X...", "push X..."
+4. If no clear match, return null
+
+Return ONLY this JSON format, no other text:
+{"eventIndex": 1, "eventId": "event_id_here", "eventTitle": "Event Title"}
+
+If no match found, return: {"eventIndex": null}`;
+
+    try {
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.1,
+          max_tokens: 100,
+        }),
+      });
+
+      if (!response.ok) return null;
+
+      const data = await response.json();
+      const content = data.choices[0]?.message?.content?.trim();
+
+      // Parse JSON from response
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) return null;
+
+      const parsed = JSON.parse(jsonMatch[0]);
+
+      if (parsed.eventIndex === null || !parsed.eventId) {
+        return null;
+      }
+
+      console.log('[Chatbot] AI found event to move:', parsed);
+
+      return {
+        id: parsed.eventId,
+        title: parsed.eventTitle || 'Event'
+      };
+    } catch (error) {
+      console.error('[Chatbot] AI event finding for move failed:', error);
+      return null;
+    }
+  };
+
   // Fallback: basic regex parsing (used when AI extraction fails)
   const parseEventDetails = (userRequest: string): { title: string; start: Date; end: Date } | null => {
     const lower = userRequest.toLowerCase();
@@ -1465,43 +1572,89 @@ If no match found, return: {"eventIndex": null}`;
           }
         } else if (message.action.type === "move" && message.action.userRequest) {
           // Handle move/reschedule
-          const eventDetails = parseEventDetails(message.action.userRequest);
-          if (eventDetails && message.action.eventId) {
-            await callTool('update_event', {
-              calendarId: 'primary',
-              eventId: message.action.eventId,
-              start: { dateTime: eventDetails.start.toISOString() },
-              end: { dateTime: eventDetails.end.toISOString() },
-            });
+          console.log('[Chatbot] Move action - eventId:', message.action.eventId, 'userRequest:', message.action.userRequest);
 
-            // Invalidate CalendarContext cache - components will refetch when needed
-            invalidateCalendarCache();
+          // Use AI to extract new time details
+          const eventDetails = await extractEventDetailsWithAI(message.action.userRequest, calendarEvents)
+            || parseEventDetails(message.action.userRequest);
 
-            const updatedEvents = await loadCalendarEvents();
-            setSessionState(prev => ({
-              ...prev,
-              lastUpdate: new Date(),
-              lastEvents: updatedEvents,
-              lastAction: "move",
-            }));
-            
-            // Refresh greeting with updated events
-            if (updatedEvents.length > 0) {
-              generatePersonalizedGreeting(updatedEvents);
-            }
-            
+          if (!message.action.eventId) {
+            // No event ID - show error
             setTimeout(() => {
               setMessages((prev) => [
                 ...prev,
                 {
                   id: Date.now().toString(),
                   type: "agent",
-                  content: "✓ Event rescheduled and synced to Google Calendar.",
+                  content: "Sorry, I couldn't identify which event to reschedule. Please be more specific, like 'move gym to 3pm' or 'reschedule my meeting to tomorrow'.",
                   timestamp: new Date(),
                 },
               ]);
             }, 500);
+            return;
           }
+
+          if (!eventDetails) {
+            // No time details - show error
+            setTimeout(() => {
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: Date.now().toString(),
+                  type: "agent",
+                  content: "Sorry, I couldn't understand the new time. Please specify when you'd like to reschedule to, like 'move gym to 3pm tomorrow'.",
+                  timestamp: new Date(),
+                },
+              ]);
+            }, 500);
+            return;
+          }
+
+          await callTool('update_event', {
+            calendarId: 'primary',
+            eventId: message.action.eventId,
+            start: { dateTime: eventDetails.start.toISOString() },
+            end: { dateTime: eventDetails.end.toISOString() },
+          });
+
+          // Invalidate CalendarContext cache - components will refetch when needed
+          invalidateCalendarCache();
+
+          const updatedEvents = await loadCalendarEvents();
+          setSessionState(prev => ({
+            ...prev,
+            lastUpdate: new Date(),
+            lastEvents: updatedEvents,
+            lastAction: "move",
+          }));
+
+          // Also refresh CalendarContext so app calendar views update
+          const today = getToday();
+          const weekStart = startOfWeek(today, { weekStartsOn: 1 });
+          const weekEnd = endOfWeek(today, { weekStartsOn: 1 });
+          await fetchCalendarContextEvents(weekStart, weekEnd);
+
+          // Refresh greeting with updated events
+          if (updatedEvents.length > 0) {
+            generatePersonalizedGreeting(updatedEvents);
+          }
+
+          // Notify parent component
+          if (onScheduleChange) {
+            onScheduleChange(message.action.type, `Rescheduled event: ${message.action.details}`);
+          }
+
+          setTimeout(() => {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: Date.now().toString(),
+                type: "agent",
+                content: `✓ Event rescheduled to ${format(eventDetails.start, 'EEEE, MMM d')} at ${format(eventDetails.start, 'h:mm a')} and synced to Google Calendar.`,
+                timestamp: new Date(),
+              },
+            ]);
+          }, 500);
         } else if (message.action.type === "cancel" && message.action.eventId) {
           // Handle delete/cancel event
           console.log('[Chatbot] Deleting event:', message.action.eventId);
