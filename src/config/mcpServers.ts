@@ -1,0 +1,70 @@
+// MCP Server Configuration
+// Defines the MCP servers available to the web application
+
+export interface McpServerConfig {
+  name: string;
+  url: string;
+  headers?: Record<string, string>;
+  enabled: boolean;
+  description?: string;
+}
+
+/**
+ * Get MCP server configurations
+ * Reads from environment variables for API keys
+ */
+export function getMcpServerConfigs(): McpServerConfig[] {
+  const servers: McpServerConfig[] = [];
+
+  // Google Maps MCP Server
+  const googleMapsApiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+  if (googleMapsApiKey) {
+    servers.push({
+      name: 'google-maps',
+      url: 'https://mapstools.googleapis.com/mcp',
+      headers: {
+        'X-Goog-Api-Key': googleMapsApiKey,
+      },
+      enabled: true,
+      description: 'Google Maps API - Places, Routes, Weather',
+    });
+  } else {
+    // Still register but disabled
+    servers.push({
+      name: 'google-maps',
+      url: 'https://mapstools.googleapis.com/mcp',
+      headers: {},
+      enabled: false,
+      description: 'Google Maps API - Requires VITE_GOOGLE_MAPS_API_KEY',
+    });
+  }
+
+  // Google Calendar MCP Server
+  // In production (App Engine): uses /mcp endpoint directly from server.js
+  // In development: uses Vite proxy /api/mcp-calendar/mcp -> localhost:3000/mcp
+  const calendarServerUrl = import.meta.env.VITE_CALENDAR_MCP_URL || 
+    (typeof window !== 'undefined' 
+      ? (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+        ? `${window.location.origin}/api/mcp-calendar/mcp`  // Dev: use Vite proxy
+        : `${window.location.protocol}//${window.location.host}/mcp`  // Production: direct endpoint
+      : 'http://localhost:5173/api/mcp-calendar/mcp');
+  servers.push({
+    name: 'google-calendar',
+    url: calendarServerUrl,
+    headers: {},
+    enabled: true,
+    description: 'Google Calendar MCP - Backend server endpoint',
+  });
+
+  // Canvas MCP Server
+  // Placeholder for future Canvas LMS MCP integration
+  servers.push({
+    name: 'canvas',
+    url: '', // Will be set up when Canvas MCP is available
+    headers: {},
+    enabled: false,
+    description: 'Canvas LMS - Coming soon',
+  });
+
+  return servers.filter((s) => s.enabled || s.url); // Only return servers with URLs or enabled
+}
