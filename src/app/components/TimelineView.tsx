@@ -6,7 +6,7 @@ import { Button } from "@/app/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/app/components/ui/toggle-group";
 import { useMcpServer } from "@/hooks/useMcpServer";
 import { DndContext, DragEndEvent, useDraggable, useDroppable, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
-import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, eachDayOfInterval, addWeeks, subWeeks, addMonths, subMonths, isSameDay, isSameMonth } from "date-fns";
+import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, eachDayOfInterval, addWeeks, subWeeks, addMonths, subMonths, isSameDay, isSameMonth, addDays } from "date-fns";
 import { getToday, isToday as isTodayGlobal } from "@/utils/dateUtils";
 import { useCalendar } from "@/contexts/CalendarContext";
 
@@ -295,6 +295,17 @@ export function TimelineView({ selectedDate, onDateChange }: TimelineViewProps =
 
   const formatDateRange = () => {
     if (view === 'day') {
+      const today = getToday();
+      const tomorrow = addDays(today, 1);
+      const yesterday = addDays(today, -1);
+
+      if (isSameDay(currentDate, today)) {
+        return 'Today';
+      } else if (isSameDay(currentDate, tomorrow)) {
+        return 'Tomorrow';
+      } else if (isSameDay(currentDate, yesterday)) {
+        return 'Yesterday';
+      }
       return format(currentDate, 'EEEE, MMM d, yyyy');
     } else if (view === 'week') {
       const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
