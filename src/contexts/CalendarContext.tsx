@@ -59,7 +59,8 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
   // Caching and throttling to prevent quota exceeded errors
   const lastFetchRef = useRef<{ start: string; end: string; timestamp: number } | null>(null);
   const fetchInProgressRef = useRef(false);
-  const MIN_FETCH_INTERVAL = 5000; // Minimum 5 seconds between fetches for same range
+  const lastInvalidationRef = useRef<number>(0); // Track when cache was last invalidated
+  const MIN_FETCH_INTERVAL = 2000; // Reduced to 2 seconds for better UX after writes
 
   const parseMcpEvent = (event: CalendarEvent): ParsedEvent | null => {
     try {
@@ -150,12 +151,19 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
     const endStr = endDate.toISOString();
     const now = Date.now();
 
-    if (lastFetchRef.current) {
+    // Check if cache was recently invalidated (within 1 second) - bypass throttle
+    const cacheWasInvalidated = now - lastInvalidationRef.current < 1000;
+
+    if (lastFetchRef.current && !cacheWasInvalidated) {
       const { start, end, timestamp } = lastFetchRef.current;
       if (start === startStr && end === endStr && now - timestamp < MIN_FETCH_INTERVAL) {
         console.log('[CalendarContext] Using cached data, skipping fetch');
         return;
       }
+    }
+
+    if (cacheWasInvalidated) {
+      console.log('[CalendarContext] Cache was recently invalidated, bypassing throttle');
     }
 
     fetchInProgressRef.current = true;
@@ -220,10 +228,11 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
 
   // Clear cache to force next fetch (call after creating/updating/deleting events)
   // This does NOT trigger a fetch - components should call fetchEvents if needed
+  // However, it sets a timestamp so that the next fetchEvents call bypasses throttling
   const invalidateCache = useCallback(() => {
-    console.log('[CalendarContext] Cache invalidated - components should fetch if needed');
+    console.log('[CalendarContext] Cache invalidated - next fetch will bypass throttle');
     lastFetchRef.current = null;
-    // Don't automatically fetch - let components decide when to refetch
+    lastInvalidationRef.current = Date.now(); // Allow immediate refetch
   }, []);
 
   const value = {

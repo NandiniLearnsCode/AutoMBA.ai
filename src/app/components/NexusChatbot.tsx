@@ -24,6 +24,8 @@ interface ParsedEvent {
   status: "completed" | "current" | "upcoming" | "suggested";
   location?: string;
   priority: "hard-block" | "flexible" | "optional";
+  startDate: Date; // Required for AI functions to understand event timing
+  endDate?: Date;
 }
 
 // Google Calendar event structure from MCP server
@@ -141,6 +143,8 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
         status,
         location: event.location,
         priority: "hard-block" as const,
+        startDate: start,
+        endDate: end,
       };
     } catch (error) {
       console.error('Error parsing MCP event:', error);
@@ -150,54 +154,71 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
 
   // Helper to parse MCP response and convert to ParsedEvent array
   const parseMcpEventsResponse = (response: any): ParsedEvent[] => {
+    console.log('[Chatbot] parseMcpEventsResponse called with:', typeof response);
+
     try {
       let events: CalendarEvent[] = [];
-      
+
       if (!response) {
+        console.log('[Chatbot] Response is null/undefined');
         return [];
       }
-      
+
       if (Array.isArray(response)) {
+        console.log('[Chatbot] Response is array with', response.length, 'items');
         // Response is an array of content items
         const textContent = response.find((item: any) => item.type === 'text');
         if (textContent?.text) {
+          console.log('[Chatbot] Found text content, parsing JSON...');
           try {
             events = JSON.parse(textContent.text);
+            console.log('[Chatbot] Parsed', events.length, 'events from text content');
           } catch (parseError) {
-            console.error('Error parsing JSON from text content:', parseError);
+            console.error('[Chatbot] Error parsing JSON from text content:', parseError);
             return [];
           }
         } else if (response.length > 0 && typeof response[0] === 'object' && 'id' in response[0]) {
           // Response might be an array of events directly
+          console.log('[Chatbot] Response is array of events directly');
           events = response as CalendarEvent[];
         } else {
-          console.warn('Unexpected response format:', response);
+          console.warn('[Chatbot] Unexpected response format:', response);
           return [];
         }
       } else if (typeof response === 'string') {
         // Response is a JSON string
+        console.log('[Chatbot] Response is string, parsing JSON...');
         try {
           events = JSON.parse(response);
+          console.log('[Chatbot] Parsed', events.length, 'events from string');
         } catch (parseError) {
-          console.error('Error parsing JSON string:', parseError);
+          console.error('[Chatbot] Error parsing JSON string:', parseError);
           return [];
         }
+      } else if (typeof response === 'object' && response.content) {
+        // Response might be wrapped in a content object
+        console.log('[Chatbot] Response has content property, extracting...');
+        return parseMcpEventsResponse(response.content);
       } else {
-        console.warn('Unexpected response type:', typeof response, response);
+        console.warn('[Chatbot] Unexpected response type:', typeof response, response);
         return [];
       }
-      
+
       // Ensure events is an array
       if (!Array.isArray(events)) {
-        console.warn('Parsed events is not an array:', events);
+        console.warn('[Chatbot] Parsed events is not an array:', events);
         return [];
       }
-      
-      return events
+
+      console.log('[Chatbot] Mapping', events.length, 'events to ParsedEvent format');
+      const parsed = events
         .map(parseMcpEventToParsed)
         .filter((event): event is ParsedEvent => event !== null);
+
+      console.log('[Chatbot] Successfully parsed', parsed.length, 'events');
+      return parsed;
     } catch (error) {
-      console.error('Error in parseMcpEventsResponse:', error);
+      console.error('[Chatbot] Error in parseMcpEventsResponse:', error);
       return [];
     }
   };
@@ -249,32 +270,42 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
 
   // Load calendar events for context-awareness (loads current week by default)
   const loadCalendarEvents = useCallback(async (dateRange?: { startDate: Date; endDate: Date }): Promise<ParsedEvent[]> => {
+    console.log('[Chatbot] loadCalendarEvents called, connected:', connected);
+
     if (!connected) {
+      console.log('[Chatbot] Not connected, attempting to connect...');
       await connect();
       return []; // Return empty array if not connected
     }
-    
+
     try {
       // Default to current week if no date range specified (using global "today")
       const today = getToday(); // Use actual system date
       const startDate = dateRange?.startDate || startOfWeek(today, { weekStartsOn: 1 });
       const endDate = dateRange?.endDate || endOfWeek(today, { weekStartsOn: 1 });
-      
+
       startDate.setHours(0, 0, 0, 0);
       endDate.setHours(23, 59, 59, 999);
-      
+
+      console.log('[Chatbot] Fetching events from', startDate.toISOString(), 'to', endDate.toISOString());
+
       const response = await callTool('list_events', {
         calendarId: 'primary',
         timeMin: startDate.toISOString(),
         timeMax: endDate.toISOString(),
         maxResults: 500, // Increased for week/month views
       });
-      
+
+      console.log('[Chatbot] MCP list_events raw response:', JSON.stringify(response).substring(0, 500));
+
       const parsedEvents = parseMcpEventsResponse(response);
+      console.log('[Chatbot] Parsed events count:', parsedEvents.length);
+      console.log('[Chatbot] Parsed events:', parsedEvents.map(e => ({ title: e.title, time: e.time, startDate: e.startDate?.toISOString() })));
+
       setCalendarEvents(parsedEvents);
       return parsedEvents || []; // Return events, ensure it's an array
     } catch (error) {
-      console.error('Error loading calendar events:', error);
+      console.error('[Chatbot] Error loading calendar events:', error);
       setCalendarEvents([]); // Set empty array on error
       return []; // Return empty array if load fails
     }
@@ -402,9 +433,17 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
 
     let calendarContextText = '';
     if (calendarContext && calendarContext.length > 0) {
-      calendarContextText = `\n\nCurrent calendar events for the requested period:\n${calendarContext.map(e => 
-        `- ${e.title} (${e.time}, ${e.duration}min, ${e.type})`
-      ).join('\n')}\n\nUse this calendar information to make informed suggestions. Consider conflicts, priorities, and tradeoffs.`;
+      // Format events with full date/time information
+      const formattedEvents = calendarContext.map(e => {
+        const dateStr = e.startDate ? format(e.startDate, 'EEE, MMM d') : 'Unknown date';
+        return `- ${e.title} on ${dateStr} at ${e.time} (${e.duration}min, ${e.type})`;
+      }).join('\n');
+
+      calendarContextText = `\n\nCALENDAR EVENTS (from Google Calendar):\n${formattedEvents}\n\nIMPORTANT: These are the ACTUAL events from the user's Google Calendar. Use this information to answer questions about their schedule. Do NOT make up or hallucinate events that are not listed above.`;
+
+      console.log('[Chatbot] Calendar context for AI:', formattedEvents);
+    } else {
+      console.log('[Chatbot] No calendar events to provide context');
     }
 
     const systemPrompt = `You are Kaisey, an AI assistant helping MBA students optimize their schedules.
@@ -536,12 +575,18 @@ ${calendarContextText}
 
       // Parse date range from user input and load relevant events
       const dateRange = parseDateFromInput(messageToSend);
-      
+      console.log('[Chatbot] Parsed date range:', {
+        start: dateRange.startDate.toISOString(),
+        end: dateRange.endDate.toISOString()
+      });
+
       // Load events for the detected date range and use the returned events directly
       const relevantEvents = await loadCalendarEvents(dateRange);
-      
+      console.log('[Chatbot] Loaded events for AI context:', relevantEvents.length, 'events');
+
       // Ensure relevantEvents is an array (defensive programming)
       const eventsArray = Array.isArray(relevantEvents) ? relevantEvents : [];
+      console.log('[Chatbot] Passing', eventsArray.length, 'events to callOpenAI');
 
       // Call OpenAI API with calendar context and session state
       const userMessageWithContext = messageToSend + sessionContext;
