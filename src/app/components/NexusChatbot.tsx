@@ -1892,13 +1892,36 @@ If no match found, return: {"eventIndex": null}`;
 
             if (conflictingEvent) {
               console.log('[Chatbot] Conflict detected with:', conflictingEvent.title);
+
+              // Find alternative time slots based on the activity type
+              const durationMinutes = Math.round((eventEnd - eventStart) / (1000 * 60));
+              const alternativeSlots = findAvailableTimeSlots(
+                eventDetails.title,
+                calendarEvents,
+                eventDetails.start,
+                durationMinutes
+              );
+
+              // Build suggestion message with alternatives
+              let conflictMessage = `I can't create "${eventDetails.title}" at ${format(eventDetails.start, 'h:mm a')} because you already have "${conflictingEvent.title}" scheduled at that time.`;
+
+              if (alternativeSlots.length > 0) {
+                conflictMessage += `\n\n**Available time slots for ${eventDetails.title}:**\n`;
+                alternativeSlots.forEach((slot, index) => {
+                  conflictMessage += `${index + 1}. ${slot.label}\n`;
+                });
+                conflictMessage += `\nJust say something like "schedule it at ${alternativeSlots[0].label.split(' (')[0]}" to book one of these times.`;
+              } else {
+                conflictMessage += ` Please specify a different time.`;
+              }
+
               setTimeout(() => {
                 setMessages((prev) => [
                   ...prev,
                   {
                     id: Date.now().toString(),
                     type: "agent",
-                    content: `I can't create this event because it conflicts with "${conflictingEvent.title}" at ${conflictingEvent.time}. Please specify a different time, like "add dinner at 8pm" or "schedule dinner for 6pm".`,
+                    content: conflictMessage,
                     timestamp: new Date(),
                   },
                 ]);
@@ -2002,6 +2025,58 @@ If no match found, return: {"eventIndex": null}`;
                   id: Date.now().toString(),
                   type: "agent",
                   content: "Sorry, I couldn't understand the new time. Please specify when you'd like to reschedule to, like 'move gym to 3pm tomorrow'.",
+                  timestamp: new Date(),
+                },
+              ]);
+            }, 500);
+            return;
+          }
+
+          // Check for conflicts at the new time (excluding the event being moved)
+          const newStart = eventDetails.start.getTime();
+          const newEnd = eventDetails.end.getTime();
+          const moveConflict = calendarEvents.find(existingEvent => {
+            // Skip the event being moved
+            if (existingEvent.id === message.action.eventId) return false;
+            if (!existingEvent.startDate || !existingEvent.endDate) return false;
+            const existingStart = existingEvent.startDate.getTime();
+            const existingEnd = existingEvent.endDate.getTime();
+            return (newStart < existingEnd && newEnd > existingStart);
+          });
+
+          if (moveConflict) {
+            console.log('[Chatbot] Move conflict detected with:', moveConflict.title);
+
+            // Find alternative time slots
+            const durationMinutes = Math.round((newEnd - newStart) / (1000 * 60));
+            const eventTitle = message.action.eventTitle || 'this event';
+            const alternativeSlots = findAvailableTimeSlots(
+              eventTitle,
+              calendarEvents.filter(e => e.id !== message.action.eventId),
+              eventDetails.start,
+              durationMinutes
+            );
+
+            // Build suggestion message with alternatives
+            let conflictMessage = `I can't move "${eventTitle}" to ${format(eventDetails.start, 'h:mm a')} because you already have "${moveConflict.title}" scheduled at that time.`;
+
+            if (alternativeSlots.length > 0) {
+              conflictMessage += `\n\n**Available time slots:**\n`;
+              alternativeSlots.forEach((slot, index) => {
+                conflictMessage += `${index + 1}. ${slot.label}\n`;
+              });
+              conflictMessage += `\nJust say something like "move it to ${alternativeSlots[0].label.split(' (')[0]}" to reschedule.`;
+            } else {
+              conflictMessage += ` Please specify a different time.`;
+            }
+
+            setTimeout(() => {
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: Date.now().toString(),
+                  type: "agent",
+                  content: conflictMessage,
                   timestamp: new Date(),
                 },
               ]);
