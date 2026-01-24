@@ -88,8 +88,8 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
   // Use MCP server hook for Google Calendar
   const { connected, loading: mcpLoading, error: mcpError, callTool, connect } = useMcpServer('google-calendar');
 
-  // Use CalendarContext to invalidate cache after calendar changes
-  const { invalidateCache: invalidateCalendarCache } = useCalendar();
+  // Use CalendarContext to invalidate cache and refresh calendar after changes
+  const { invalidateCache: invalidateCalendarCache, fetchEvents: fetchCalendarContextEvents } = useCalendar();
 
   // Helper to parse MCP CalendarEvent to ParsedEvent format
   const parseMcpEventToParsed = (event: CalendarEvent): ParsedEvent | null => {
@@ -762,7 +762,13 @@ ${calendarContextText}
                           calendarId: 'primary',
                           eventId: createdEventId,
                         });
+                        invalidateCalendarCache();
                         await loadCalendarEvents();
+                        // Refresh CalendarContext for app calendar views
+                        const today = getToday();
+                        const weekStart = startOfWeek(today, { weekStartsOn: 1 });
+                        const weekEnd = endOfWeek(today, { weekStartsOn: 1 });
+                        await fetchCalendarContextEvents(weekStart, weekEnd);
                         toastFn.success("Event removed");
                       } catch (e) {
                         console.error("Error undoing event:", e);
@@ -844,7 +850,7 @@ ${calendarContextText}
             // Invalidate CalendarContext cache
             invalidateCalendarCache();
 
-            // Reload calendar to update state
+            // Reload calendar to update chatbot's local state
             const updatedEvents = await loadCalendarEvents();
             setSessionState(prev => ({
               ...prev,
@@ -852,6 +858,12 @@ ${calendarContextText}
               lastEvents: updatedEvents,
               lastAction: "cancel",
             }));
+
+            // Also refresh CalendarContext so app calendar views update
+            const today = getToday();
+            const weekStart = startOfWeek(today, { weekStartsOn: 1 });
+            const weekEnd = endOfWeek(today, { weekStartsOn: 1 });
+            await fetchCalendarContextEvents(weekStart, weekEnd);
 
             // Import toast for notification
             const { toast: toastFn } = await import("sonner");
@@ -1450,7 +1462,7 @@ If no match found, return: {"eventIndex": null}`;
         } else if (message.action.type === "cancel" && message.action.eventId) {
           // Handle delete/cancel event
           console.log('[Chatbot] Deleting event:', message.action.eventId);
-          
+
           await callTool('delete_event', {
             calendarId: 'primary',
             eventId: message.action.eventId,
@@ -1466,7 +1478,13 @@ If no match found, return: {"eventIndex": null}`;
             lastEvents: updatedEvents,
             lastAction: "cancel",
           }));
-          
+
+          // Also refresh CalendarContext so app calendar views update
+          const today = getToday();
+          const weekStart = startOfWeek(today, { weekStartsOn: 1 });
+          const weekEnd = endOfWeek(today, { weekStartsOn: 1 });
+          await fetchCalendarContextEvents(weekStart, weekEnd);
+
           // Refresh greeting with updated events
           if (updatedEvents.length > 0) {
             generatePersonalizedGreeting(updatedEvents);

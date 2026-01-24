@@ -199,17 +199,15 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
         .map(parseMcpEvent)
         .filter((e): e is ParsedEvent => e !== null);
 
+      // Replace events within the fetched date range (properly handles deletions)
+      // Events outside the fetched range are preserved
       setEvents(prevEvents => {
-        const newEvents = [...prevEvents];
-        parsedEvents.forEach(newEvent => {
-          const index = newEvents.findIndex(e => e.id === newEvent.id);
-          if (index !== -1) {
-            newEvents[index] = newEvent;
-          } else {
-            newEvents.push(newEvent);
-          }
+        // Keep events that are outside the fetched date range
+        const eventsOutsideRange = prevEvents.filter(event => {
+          return event.startDate < startDate || event.startDate > endDate;
         });
-        return newEvents;
+        // Combine with the freshly fetched events
+        return [...eventsOutsideRange, ...parsedEvents];
       });
     } catch (err: any) {
       setError(err.message || 'Failed to fetch calendar events');
