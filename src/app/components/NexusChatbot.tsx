@@ -8,7 +8,7 @@ import { Input } from "@/app/components/ui/input";
 import { Badge } from "@/app/components/ui/badge";
 import { ScrollArea } from "@/app/components/ui/scroll-area";
 import { motion, AnimatePresence } from "motion/react";
-import { getOpenAIApiKey } from "@/config/apiKey";
+import { getOpenAIApiKey, OPENAI_CHAT_MODEL } from "@/config/apiKey";
 import { useMcpServer } from "@/hooks/useMcpServer";
 import { useCalendar } from "@/contexts/CalendarContext";
 import { format, startOfWeek, endOfWeek, addDays, addWeeks, addMonths, startOfDay, endOfDay, startOfMonth, endOfMonth } from "date-fns";
@@ -635,7 +635,7 @@ ${calendarContextText}
           "Authorization": `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: "gpt-4o-mini",
+          model: OPENAI_CHAT_MODEL,
           messages: [
             { role: "system", content: systemPrompt },
             ...conversationHistory,
@@ -1392,7 +1392,7 @@ Return ONLY this JSON format, no other text:
           "Authorization": `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: "gpt-4o-mini",
+          model: OPENAI_CHAT_MODEL,
           messages: [{ role: "user", content: prompt }],
           temperature: 0.3,
           max_tokens: 150,
@@ -1526,7 +1526,7 @@ If no match found, return: {"eventIndex": null}`;
           "Authorization": `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: "gpt-4o-mini",
+          model: OPENAI_CHAT_MODEL,
           messages: [{ role: "user", content: prompt }],
           temperature: 0.1,
           max_tokens: 100,
@@ -1602,7 +1602,7 @@ Return ONLY a JSON array with the 5 category IDs in the new order, no other text
           "Authorization": `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: "gpt-4o-mini",
+          model: OPENAI_CHAT_MODEL,
           messages: [{ role: "user", content: prompt }],
           temperature: 0.2,
           max_tokens: 100,
@@ -1693,7 +1693,7 @@ If no match found, return: {"eventIndex": null}`;
           "Authorization": `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: "gpt-4o-mini",
+          model: OPENAI_CHAT_MODEL,
           messages: [{ role: "user", content: prompt }],
           temperature: 0.1,
           max_tokens: 100,

@@ -1,4 +1,4 @@
-import { getOpenAIApiKey } from "@/config/apiKey";
+import { getOpenAIApiKey, OPENAI_CHAT_MODEL } from "@/config/apiKey";
 import { getToday } from "./dateUtils";
 import { startOfDay, endOfDay, format } from "date-fns";
 
@@ -163,7 +163,7 @@ Be specific with times, event names, and actions. Reference the current time and
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
+        model: OPENAI_CHAT_MODEL,
         messages: [
           { role: "system", content: systemPrompt },
           {
