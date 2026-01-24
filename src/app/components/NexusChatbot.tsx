@@ -765,6 +765,30 @@ ${calendarContextText}
         console.log('[Chatbot] Auto-execute: extracted event details:', eventDetails);
 
         if (eventDetails) {
+          // Check for conflicts before creating the event
+          const eventStart = eventDetails.start.getTime();
+          const eventEnd = eventDetails.end.getTime();
+          const conflictingEvent = eventsArray.find(existingEvent => {
+            if (!existingEvent.startDate || !existingEvent.endDate) return false;
+            const existingStart = existingEvent.startDate.getTime();
+            const existingEnd = existingEvent.endDate.getTime();
+            // Check if times overlap
+            return (eventStart < existingEnd && eventEnd > existingStart);
+          });
+
+          if (conflictingEvent) {
+            console.log('[Chatbot] Auto-execute: Conflict detected with:', conflictingEvent.title);
+            // Don't auto-execute, show conflict message instead
+            const conflictMessage: Message = {
+              id: messageId,
+              type: "agent",
+              content: `I can't add "${eventDetails.title}" at ${format(eventDetails.start, 'h:mm a')} because you already have "${conflictingEvent.title}" scheduled at that time. Please specify a different time.`,
+              timestamp: new Date(),
+            };
+            setMessages((prev) => [...prev, conflictMessage]);
+            return; // Don't create the event
+          }
+
           // Add temporary message
           const tempMessage: Message = {
             id: messageId,
@@ -1521,11 +1545,40 @@ If no match found, return: {"eventIndex": null}`;
         
         // Execute calendar operation based on action type
         if (message.action.type === "add" && message.action.userRequest) {
-          // Parse event details from user request
-          const eventDetails = parseEventDetails(message.action.userRequest);
-          
+          // First try AI extraction which is smarter about understanding context
+          // Then fall back to basic parsing
+          const eventDetails = await extractEventDetailsWithAI(message.action.userRequest, calendarEvents)
+            || parseEventDetails(message.action.userRequest);
+
           if (eventDetails) {
             console.log('[Chatbot] Parsed event details:', eventDetails);
+
+            // Check for conflicts before creating the event
+            const eventStart = eventDetails.start.getTime();
+            const eventEnd = eventDetails.end.getTime();
+            const conflictingEvent = calendarEvents.find(existingEvent => {
+              if (!existingEvent.startDate || !existingEvent.endDate) return false;
+              const existingStart = existingEvent.startDate.getTime();
+              const existingEnd = existingEvent.endDate.getTime();
+              // Check if times overlap
+              return (eventStart < existingEnd && eventEnd > existingStart);
+            });
+
+            if (conflictingEvent) {
+              console.log('[Chatbot] Conflict detected with:', conflictingEvent.title);
+              setTimeout(() => {
+                setMessages((prev) => [
+                  ...prev,
+                  {
+                    id: Date.now().toString(),
+                    type: "agent",
+                    content: `I can't create this event because it conflicts with "${conflictingEvent.title}" at ${conflictingEvent.time}. Please specify a different time, like "add dinner at 8pm" or "schedule dinner for 6pm".`,
+                    timestamp: new Date(),
+                  },
+                ]);
+              }, 500);
+              return;
+            }
 
             // Determine priority (default to flexible unless specified or detected from user input)
             const userRequest = message.action?.userRequest || "";
