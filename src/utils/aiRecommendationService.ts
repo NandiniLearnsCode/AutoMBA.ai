@@ -172,7 +172,7 @@ Be specific with times, event names, and actions. Reference the current time and
           },
         ],
         temperature: 0.7,
-        max_tokens: 1000,
+        max_completion_tokens: 1000,
       }),
     });
 

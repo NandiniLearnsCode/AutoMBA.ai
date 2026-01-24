@@ -642,7 +642,7 @@ ${calendarContextText}
             { role: "user", content: userMessage },
           ],
           temperature: 0.4, // Reduced for more factual, less creative responses
-          max_tokens: 500,
+          max_completion_tokens: 500,
         }),
       });
 
@@ -1395,7 +1395,7 @@ Return ONLY this JSON format, no other text:
           model: OPENAI_CHAT_MODEL,
           messages: [{ role: "user", content: prompt }],
           temperature: 0.3,
-          max_tokens: 150,
+          max_completion_tokens: 150,
         }),
       });
 
@@ -1529,7 +1529,7 @@ If no match found, return: {"eventIndex": null}`;
           model: OPENAI_CHAT_MODEL,
           messages: [{ role: "user", content: prompt }],
           temperature: 0.1,
-          max_tokens: 100,
+          max_completion_tokens: 100,
         }),
       });
 
@@ -1605,7 +1605,7 @@ Return ONLY a JSON array with the 5 category IDs in the new order, no other text
           model: OPENAI_CHAT_MODEL,
           messages: [{ role: "user", content: prompt }],
           temperature: 0.2,
-          max_tokens: 100,
+          max_completion_tokens: 100,
         }),
       });
 
@@ -1696,7 +1696,7 @@ If no match found, return: {"eventIndex": null}`;
           model: OPENAI_CHAT_MODEL,
           messages: [{ role: "user", content: prompt }],
           temperature: 0.1,
-          max_tokens: 100,
+          max_completion_tokens: 100,
         }),
       });
 
