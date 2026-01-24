@@ -1,11 +1,11 @@
-import { Sparkles, Target, Zap, Calendar, Activity, Heart } from "lucide-react";
-import { Card } from "@/app/components/ui/button";
+import { Sparkles, Target, Zap, Calendar } from "lucide-react";
+import { Card } from "@/app/components/ui/card";
 import { Badge } from "@/app/components/ui/badge";
-import { format, startOfDay, endOfDay } from "date-fns";
+import { format, startOfDay, endOfDay, isToday } from "date-fns";
 import { getToday } from "@/utils/dateUtils";
 import { useMcpServer } from "@/hooks/useMcpServer";
-import { healthContextService } from "@/services/healthContextService";
 import { useEffect, useState } from "react";
+import { useCalendar } from "@/contexts/CalendarContext";
 
 interface CalendarEvent {
   id: string;
@@ -19,130 +19,80 @@ interface CalendarEvent {
 }
 
 interface CommandCenterProps {
-  events?: CalendarEvent[];
   userFocus?: string | null;
+  selectedDate?: Date;
 }
 
-export function CommandCenter({ events: propEvents = [], userFocus }: CommandCenterProps) {
-  const [loadedEvents, setLoadedEvents] = useState<CalendarEvent[]>([]);
-  const [healthInsights, setHealthInsights] = useState<string[]>([]);
-  const [recentActivity, setRecentActivity] = useState<string>('');
+export function CommandCenter({ userFocus, selectedDate }: CommandCenterProps) {
   const { connected, callTool, connect } = useMcpServer('google-calendar');
-  
-  // Use prop events if provided, otherwise use loaded events
-  const events = propEvents.length > 0 ? propEvents : loadedEvents;
+  const { events: contextEvents, getEvents, fetchEvents, loading: calendarLoading } = useCalendar();
+  const [events, setEvents] = useState<CalendarEvent[]>([]);
 
-  // Load health insights
+  // Use selectedDate prop or default to today
+  const displayDate = selectedDate || getToday();
+  const isDisplayingToday = isToday(displayDate);
+
+  // Load events for the selected date
   useEffect(() => {
-    const loadHealthData = async () => {
-      try {
-        const context = await healthContextService.getHealthContext(7);
-        if (context.hasData) {
-          setHealthInsights(context.insights || []);
-          setRecentActivity(context.recentActivity || '');
-        }
-      } catch (error) {
-        console.warn('Could not load health data:', error);
-      }
-    };
+    const dayStart = startOfDay(displayDate);
+    const dayEnd = endOfDay(displayDate);
+    fetchEvents(dayStart, dayEnd);
+  }, [fetchEvents, displayDate]);
 
-    loadHealthData();
-  }, []);
-
-  // Load today's events from calendar
+  // Update local events when CalendarContext events change
   useEffect(() => {
-    const loadTodayEvents = async () => {
-      if (!connected) {
-        await connect();
-        return;
-      }
+    const dayStart = startOfDay(displayDate);
+    const dayEnd = endOfDay(displayDate);
+    const fetchedEvents = getEvents(dayStart, dayEnd);
 
-      try {
-        const today = getToday();
-        const dayStart = startOfDay(today);
-        const dayEnd = endOfDay(today);
-        
-        dayStart.setHours(0, 0, 0, 0);
-        dayEnd.setHours(23, 59, 59, 999);
+    // Convert to CalendarEvent format
+    const parsedEvents: CalendarEvent[] = fetchedEvents
+      .map((event: any) => {
+        const startTime = event.startDate;
+        if (!startTime) return null;
 
-        const response = await callTool('list_events', {
-          calendarId: 'primary',
-          timeMin: dayStart.toISOString(),
-          timeMax: dayEnd.toISOString(),
-          maxResults: 50,
+        const start = new Date(startTime);
+        const end = new Date(event.endDate);
+        const duration = Math.round((end.getTime() - start.getTime()) / (1000 * 60));
+
+        const timeStr = start.toLocaleTimeString('en-US', {
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false
         });
 
-        // Parse events (similar to TimelineView)
-        let calendarEvents: any[] = [];
-        if (Array.isArray(response)) {
-          const textContent = response.find((item: any) => item.type === 'text');
-          if (textContent?.text) {
-            try {
-              calendarEvents = JSON.parse(textContent.text);
-            } catch (e) {
-              console.error('Error parsing calendar events:', e);
-            }
-          } else if (response.length > 0 && typeof response[0] === 'object' && 'id' in response[0]) {
-            calendarEvents = response;
-          }
+        const summary = event.title || 'Untitled Event';
+        const lowerSummary = summary.toLowerCase();
+        let type: CalendarEvent['type'] = "meeting";
+
+        if (lowerSummary.includes('class') || lowerSummary.includes('course') || lowerSummary.includes('lecture')) {
+          type = "class";
+        } else if (lowerSummary.includes('study') || lowerSummary.includes('homework') || lowerSummary.includes('assignment')) {
+          type = "study";
+        } else if (lowerSummary.includes('gym') || lowerSummary.includes('workout') || lowerSummary.includes('exercise')) {
+          type = "workout";
+        } else if (lowerSummary.includes('coffee') || lowerSummary.includes('networking') || lowerSummary.includes('chat')) {
+          type = "networking";
+        } else if (lowerSummary.includes('recruiting') || lowerSummary.includes('interview') || lowerSummary.includes('info session')) {
+          type = "recruiting";
         }
 
-        // Convert to CalendarEvent format
-        const parsedEvents: CalendarEvent[] = calendarEvents
-          .map((event: any) => {
-            const startTime = event.start?.dateTime || event.start?.date;
-            if (!startTime) return null;
-            
-            const start = new Date(startTime);
-            const end = new Date(event.end?.dateTime || event.end?.date || startTime);
-            const duration = Math.round((end.getTime() - start.getTime()) / (1000 * 60));
-            
-            const timeStr = start.toLocaleTimeString('en-US', { 
-              hour: '2-digit', 
-              minute: '2-digit', 
-              hour12: false 
-            });
+        return {
+          id: event.id,
+          title: summary,
+          time: timeStr,
+          duration,
+          type,
+          color: "",
+          startDate: start,
+          endDate: end,
+        };
+      })
+      .filter((e): e is CalendarEvent => e !== null)
+      .sort((a, b) => a.time.localeCompare(b.time));
 
-            const summary = event.summary || 'Untitled Event';
-            const lowerSummary = summary.toLowerCase();
-            let type: CalendarEvent['type'] = "meeting";
-            
-            if (lowerSummary.includes('class') || lowerSummary.includes('course') || lowerSummary.includes('lecture')) {
-              type = "class";
-            } else if (lowerSummary.includes('study') || lowerSummary.includes('homework') || lowerSummary.includes('assignment')) {
-              type = "study";
-            } else if (lowerSummary.includes('gym') || lowerSummary.includes('workout') || lowerSummary.includes('exercise')) {
-              type = "workout";
-            } else if (lowerSummary.includes('coffee') || lowerSummary.includes('networking') || lowerSummary.includes('chat')) {
-              type = "networking";
-            } else if (lowerSummary.includes('recruiting') || lowerSummary.includes('interview') || lowerSummary.includes('info session')) {
-              type = "recruiting";
-            }
-
-            return {
-              id: event.id,
-              title: summary,
-              time: timeStr,
-              duration,
-              type,
-              color: "",
-              startDate: start,
-              endDate: end,
-            };
-          })
-          .filter((e): e is CalendarEvent => e !== null)
-          .sort((a, b) => a.time.localeCompare(b.time));
-
-        setLoadedEvents(parsedEvents);
-      } catch (error) {
-        console.error('Error loading today\'s events:', error);
-      }
-    };
-
-    if (connected) {
-      loadTodayEvents();
-    }
-  }, [connected, callTool, connect]);
+    setEvents(parsedEvents);
+  }, [contextEvents, getEvents]); // Re-run when context events change
 
   // Get current time-based greeting
   const currentHour = new Date().getHours();
@@ -162,18 +112,19 @@ export function CommandCenter({ events: propEvents = [], userFocus }: CommandCen
   const currentTime = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
   const upcomingEvent = events.find(event => event.time > currentTime) || events[0];
   
-  // Generate contextual description of today's schedule
+  // Generate contextual description of the day's schedule
+  const dayLabel = isDisplayingToday ? "today" : format(displayDate, 'EEEE');
   const generateScheduleDescription = (): string => {
     if (totalEvents === 0) {
-      return "You have a free day today. Perfect opportunity to catch up on assignments or schedule networking meetings.";
+      return `You have a free day ${isDisplayingToday ? 'today' : 'on ' + format(displayDate, 'EEEE')}. Perfect opportunity to catch up on assignments or schedule networking meetings.`;
     }
 
     const sortedEvents = [...events].sort((a, b) => a.time.localeCompare(b.time));
     const firstEvent = sortedEvents[0];
     const lastEvent = sortedEvents[sortedEvents.length - 1];
-    
-    let description = `Your day starts at ${firstEvent.time} with "${firstEvent.title}"`;
-    
+
+    let description = `${isDisplayingToday ? 'Your day starts' : format(displayDate, 'EEEE') + ' starts'} at ${firstEvent.time} with "${firstEvent.title}"`;
+
     if (totalEvents > 1) {
       description += ` and wraps up at ${lastEvent.time} with "${lastEvent.title}". `;
     } else {
@@ -182,14 +133,14 @@ export function CommandCenter({ events: propEvents = [], userFocus }: CommandCen
 
     // Add context based on event types
     if (eventTypes.class && eventTypes.class >= 2) {
-      description += `You have ${eventTypes.class} classes today, so focus on academic preparation. `;
+      description += `You have ${eventTypes.class} classes ${dayLabel}, so focus on academic preparation. `;
     }
-    
+
     if (eventTypes.networking || eventTypes.recruiting) {
       const networkingTotal = (eventTypes.networking || 0) + (eventTypes.recruiting || 0);
       description += `${networkingTotal} networking event${networkingTotal > 1 ? 's' : ''} ${networkingTotal > 1 ? 'are' : 'is'} scheduled - great for building connections. `;
     }
-    
+
     if (eventTypes.workout) {
       description += `You've scheduled ${eventTypes.workout} workout${eventTypes.workout > 1 ? 's' : ''} - maintaining your wellness routine. `;
     }
@@ -202,7 +153,7 @@ export function CommandCenter({ events: propEvents = [], userFocus }: CommandCen
       const currentEnd = new Date(current.startDate || new Date());
       currentEnd.setMinutes(currentEnd.getMinutes() + current.duration);
       const nextStart = new Date(next.startDate || new Date());
-      
+
       const bufferMinutes = (nextStart.getTime() - currentEnd.getTime()) / (1000 * 60);
       if (bufferMinutes < 15 && bufferMinutes >= 0) {
         hasTightSchedule = true;
@@ -229,8 +180,6 @@ export function CommandCenter({ events: propEvents = [], userFocus }: CommandCen
     focus = "Academic Focus";
   } else if (eventTypes.recruiting) {
     focus = "Professional Development";
-  } else if (eventTypes.networking) {
-    focus = "Networking & Connections";
   }
 
   // Generate contextual description
@@ -240,12 +189,12 @@ export function CommandCenter({ events: propEvents = [], userFocus }: CommandCen
   const classCount = eventTypes.class || 0;
   const networkingCount = (eventTypes.networking || 0) + (eventTypes.recruiting || 0);
   
-  let message = `${greeting}, Siddhant! `;
-  
+  let message = `${greeting}, Star MBA Student! `;
+
   if (totalEvents > 0) {
     message += scheduleDescription;
   } else {
-    message += "You have a free day today. Perfect opportunity to catch up on assignments or schedule networking meetings.";
+    message += `You have a free day ${isDisplayingToday ? 'today' : 'on ' + format(displayDate, 'EEEE')}. Perfect opportunity to catch up on assignments or schedule networking meetings.`;
   }
 
   return (
@@ -257,45 +206,22 @@ export function CommandCenter({ events: propEvents = [], userFocus }: CommandCen
       
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-4">
-            <h2 className="text-xl font-bold">Your Day at a Glance</h2>
+            <h2 className="text-xl font-bold">{isDisplayingToday ? "Your Day at a Glance" : format(displayDate, 'EEEE') + " at a Glance"}</h2>
             <Badge className="bg-blue-500 text-white shrink-0">
               <Calendar className="w-3 h-3 mr-1" />
-              {format(getToday(), 'EEEE, MMM d')}
+              {format(displayDate, 'EEEE, MMM d')}
             </Badge>
           </div>
-        
+
           <p className="text-sm mb-4 leading-relaxed">
             {message}
           </p>
-          
-          {/* Health Insights Section */}
-          {healthInsights.length > 0 && (
-            <div className="bg-white/70 dark:bg-gray-800/70 rounded-lg p-3 mb-4 space-y-2">
-              <div className="flex items-center gap-2">
-                <Activity className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-                <span className="text-xs font-semibold text-gray-900 dark:text-white">Health & Wellness (7 days)</span>
-              </div>
-              {recentActivity && (
-                <p className="text-xs text-gray-600 dark:text-gray-400 font-medium">
-                  {recentActivity}
-                </p>
-              )}
-              <div className="space-y-1">
-                {healthInsights.slice(0, 2).map((insight, index) => (
-                  <div key={index} className="flex items-start gap-2">
-                    <Heart className="w-3 h-3 text-red-500 mt-0.5 flex-shrink-0" />
-                    <p className="text-xs text-gray-700 dark:text-gray-300">{insight}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          
+
           <div className="flex items-start gap-6">
             <div className="flex items-start gap-2">
               <Target className="w-4 h-4 text-blue-500 mt-0.5 shrink-0" />
               <div>
-                <div className="text-xs text-muted-foreground">Today's Focus</div>
+                <div className="text-xs text-muted-foreground">{isDisplayingToday ? "Today's Focus" : format(displayDate, 'EEEE') + "'s Focus"}</div>
                 <div className="text-sm font-semibold">{focus}</div>
               </div>
             </div>

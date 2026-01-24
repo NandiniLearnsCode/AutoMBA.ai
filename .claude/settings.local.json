@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(test:*)",
+      "Bash(node server/mcp-calendar-server.js:*)",
+      "Bash(curl:*)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(ss:*)",
+      "Bash(npm run build:*)",
+      "WebFetch(domain:automba-ai-qqyo.onrender.com)",
+      "Bash(npx tsc:*)"
+    ]
+  }
+}

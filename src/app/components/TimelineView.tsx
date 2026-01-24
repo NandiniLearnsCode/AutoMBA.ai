@@ -6,8 +6,9 @@ import { Button } from "@/app/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/app/components/ui/toggle-group";
 import { useMcpServer } from "@/hooks/useMcpServer";
 import { DndContext, DragEndEvent, useDraggable, useDroppable, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
-import { format, startOfWeek, endOfWeek, startOfMonth, endOfMonth, eachDayOfInterval, addWeeks, subWeeks, addMonths, subMonths, isSameDay, isSameMonth } from "date-fns";
+import { format, startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, eachDayOfInterval, addWeeks, subWeeks, addMonths, subMonths, isSameDay, isSameMonth } from "date-fns";
 import { getToday, isToday as isTodayGlobal } from "@/utils/dateUtils";
+import { useCalendar } from "@/contexts/CalendarContext";
 
 interface TimeBlock {
   id: string;
@@ -32,22 +33,6 @@ const typeConfig = {
   recruiting: { icon: Briefcase, color: "bg-red-500" },
   buffer: { icon: Clock, color: "bg-gray-400" },
 };
-
-// Google Calendar event structure from MCP server
-interface CalendarEvent {
-  id: string;
-  summary?: string;
-  start: {
-    dateTime?: string;
-    date?: string;
-  };
-  end: {
-    dateTime?: string;
-    date?: string;
-  };
-  location?: string;
-  description?: string;
-}
 
 // Draggable Event Component (for Day View)
 function DraggableEvent({ block, index, isLast, typeConfig }: { block: TimeBlock; index: number; isLast: boolean; typeConfig: typeof typeConfig }) {
@@ -254,82 +239,24 @@ function MonthView({ timeBlocks, currentDate, typeConfig }: { timeBlocks: TimeBl
   );
 }
 
-// Parse MCP event response to TimeBlock format
-function parseMcpEvent(event: CalendarEvent): TimeBlock | null {
-  try {
-    const startTime = event.start?.dateTime || event.start?.date;
-    if (!startTime) return null;
-    
-    const start = new Date(startTime);
-    const end = new Date(event.end?.dateTime || event.end?.date || startTime);
-    const duration = Math.round((end.getTime() - start.getTime()) / (1000 * 60)); // minutes
-    
-    const now = new Date();
-    let status: "completed" | "current" | "upcoming" | "suggested" = "upcoming";
-    if (end < now) {
-      status = "completed";
-    } else if (start <= now && end >= now) {
-      status = "current";
-    }
-    
-    // Determine event type from summary/title
-    const summary = event.summary || 'Untitled Event';
-    const lowerSummary = summary.toLowerCase();
-    let type: "class" | "meeting" | "study" | "workout" | "networking" | "recruiting" | "buffer" = "meeting";
-    
-    if (lowerSummary.includes('class') || lowerSummary.includes('course') || lowerSummary.includes('lecture')) {
-      type = "class";
-    } else if (lowerSummary.includes('study') || lowerSummary.includes('homework') || lowerSummary.includes('assignment')) {
-      type = "study";
-    } else if (lowerSummary.includes('gym') || lowerSummary.includes('workout') || lowerSummary.includes('exercise')) {
-      type = "workout";
-    } else if (lowerSummary.includes('coffee') || lowerSummary.includes('networking') || lowerSummary.includes('chat')) {
-      type = "networking";
-    } else if (lowerSummary.includes('recruiting') || lowerSummary.includes('interview') || lowerSummary.includes('info session')) {
-      type = "recruiting";
-    } else if (lowerSummary.includes('buffer') || lowerSummary.includes('travel')) {
-      type = "buffer";
-    }
-    
-    const timeStr = start.toLocaleTimeString('en-US', { 
-      hour: '2-digit', 
-      minute: '2-digit', 
-      hour12: false 
-    });
-    
-    return {
-      id: event.id,
-      time: timeStr,
-      duration,
-      title: summary,
-      type,
-      status,
-      location: event.location,
-      priority: "hard-block" as const,
-      startDate: start, // Store for drag-and-drop updates
-      endDate: end, // Store for drag-and-drop updates
-    };
-  } catch (error) {
-    console.error('Error parsing MCP event:', error);
-    return null;
-  }
+interface TimelineViewProps {
+  selectedDate?: Date;
+  onDateChange?: (date: Date) => void;
 }
 
-export function TimelineView() {
-  const [timeBlocks, setTimeBlocks] = useState<TimeBlock[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [view, setView] = useState<"day" | "week" | "month">("day"); // Default to day view
-  // Set to today's date (system date) - contextually aware
-  const [currentDate, setCurrentDate] = useState(() => {
-    const today = getToday(); // Use actual system date
-    // For day view, show today. For week/month views, show the start of the period containing today
-    return today;
-  });
-  
-  // Use MCP server hook for Google Calendar
-  const { connected, loading, error: mcpError, callTool, connect } = useMcpServer('google-calendar');
-  
-  // Drag-and-drop sensors
+export function TimelineView({ selectedDate, onDateChange }: TimelineViewProps = {}) {
+  const [view, setView] = useState<"day" | "week" | "month">("day");
+  const [internalDate, setInternalDate] = useState(() => getToday());
+  const { loading: calendarLoading, error: calendarError, getEvents, fetchEvents } = useCalendar();
+  const { connected, loading: mcpLoading, error: mcpError, callTool, connect } = useMcpServer('google-calendar');
+
+  // Use controlled date if provided, otherwise use internal state
+  const currentDate = selectedDate || internalDate;
+  const setCurrentDate = (date: Date) => {
+    setInternalDate(date);
+    onDateChange?.(date);
+  };
+
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
@@ -339,136 +266,32 @@ export function TimelineView() {
   );
 
   const loadCalendarEvents = useCallback(async () => {
-    try {
-      setError(null);
-      
-      // Ensure connected to MCP server (connect is idempotent)
-      if (!connected && !loading) {
-        console.log('[TimelineView] Connecting to MCP server...');
-        await connect();
-        // Connection state will update asynchronously, so we'll proceed
-        // The useEffect will retry when connected becomes true
-        console.log('[TimelineView] Connection initiated, will retry when connected');
-        return;
-      }
-      
-      if (!connected) {
-        console.warn('[TimelineView] Not connected, skipping event load');
-        return;
-      }
-      
-      console.log('[TimelineView] Connected, fetching events...');
-      
-      // Calculate date range based on view
-      let startDate: Date;
-      let endDate: Date;
-      
-      // Use today as the reference point for all views to ensure contextual awareness
-      const today = getToday();
-      
-      if (view === 'day') {
-        // For day view, use the selected date (defaults to today)
-        startDate = new Date(currentDate);
-        startDate.setHours(0, 0, 0, 0);
-        endDate = new Date(currentDate);
-        endDate.setHours(23, 59, 59, 999);
-      } else if (view === 'week') {
-        // For week view, show the week containing the selected date (defaults to this week)
-        startDate = startOfWeek(currentDate, { weekStartsOn: 1 }); // Monday
-        startDate.setHours(0, 0, 0, 0);
-        endDate = endOfWeek(currentDate, { weekStartsOn: 1 });
-        endDate.setHours(23, 59, 59, 999);
-      } else { // month
-        // For month view, show the month containing the selected date (defaults to this month)
-        startDate = startOfMonth(currentDate);
-        startDate.setHours(0, 0, 0, 0);
-        endDate = endOfMonth(currentDate);
-        endDate.setHours(23, 59, 59, 999);
-      }
-      
-      // Call MCP list_events tool
-      console.log('[TimelineView] Calling list_events tool...', {
-        timeMin: startDate.toISOString(),
-        timeMax: endDate.toISOString(),
-      });
-      const response = await callTool('list_events', {
-        calendarId: 'primary',
-        timeMin: startDate.toISOString(),
-        timeMax: endDate.toISOString(),
-        maxResults: 500, // Increased to get more events
-      });
-      
-      console.log('[TimelineView] Received response:', response);
-      
-      // Parse MCP response (content array with text field containing JSON)
-      let events: CalendarEvent[] = [];
-      if (Array.isArray(response)) {
-        // Response is an array of content items from MCP
-        const textContent = response.find((item: any) => item.type === 'text');
-        if (textContent?.text) {
-          try {
-            events = JSON.parse(textContent.text);
-          } catch (parseError) {
-            console.error('[TimelineView] Error parsing JSON from text content:', parseError);
-            throw new Error('Failed to parse calendar events from server response');
-          }
-        } else if (response.length > 0 && typeof response[0] === 'object' && 'id' in response[0]) {
-          // Response might be an array of events directly
-          events = response as CalendarEvent[];
-        } else {
-          console.warn('[TimelineView] Unexpected response format:', response);
-        }
-      } else if (typeof response === 'string') {
-        // Response is a JSON string
-        try {
-          events = JSON.parse(response);
-        } catch (parseError) {
-          console.error('[TimelineView] Error parsing JSON string:', parseError);
-          throw new Error('Failed to parse calendar events from server response');
-        }
-      } else {
-        console.warn('[TimelineView] Unexpected response type:', typeof response, response);
-      }
-      
-      // Parse events for the selected view (day/week/month)
-      console.log('[TimelineView] Parsing', events.length, 'events');
-      const parsedEvents = events
-        .map(parseMcpEvent)
-        .filter((event): event is TimeBlock => event !== null)
-        .sort((a, b) => {
-          // Sort by start date/time
-          const dateCompare = a.startDate.getTime() - b.startDate.getTime();
-          if (dateCompare !== 0) return dateCompare;
-          // If same date, sort by time
-          const timeA = a.time.split(':').map(Number);
-          const timeB = b.time.split(':').map(Number);
-          return timeA[0] * 60 + timeA[1] - (timeB[0] * 60 + timeB[1]);
-        });
-      
-      console.log('[TimelineView] Successfully parsed', parsedEvents.length, 'events from', events.length, 'raw events');
-      setTimeBlocks(parsedEvents);
-    } catch (err: any) {
-      console.error('Error loading calendar via MCP:', err);
-      setError(err.message || 'Failed to load Google Calendar events');
-      setTimeBlocks([]);
+    let startDate: Date;
+    let endDate: Date;
+
+    if (view === 'day') {
+      startDate = startOfDay(currentDate);
+      endDate = endOfDay(currentDate);
+    } else if (view === 'week') {
+      startDate = startOfWeek(currentDate, { weekStartsOn: 1 });
+      endDate = endOfWeek(currentDate, { weekStartsOn: 1 });
+    } else { // month
+      startDate = startOfMonth(currentDate);
+      endDate = endOfMonth(currentDate);
     }
-  }, [connected, callTool, connect, view, currentDate]);
+    await fetchEvents(startDate, endDate);
+    // Only depend on view and currentDate - fetchEvents is stable from useCallback
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, currentDate]);
 
   useEffect(() => {
-    // Connect to MCP server on mount if not connected
-    if (!connected && !loading) {
-      console.log('[TimelineView] useEffect: Initiating connection...');
-      connect();
-    }
-  }, [connected, loading, connect]); // Run when connection state changes
+    loadCalendarEvents();
+  }, [loadCalendarEvents]);
 
-  useEffect(() => {
-    // Load calendar events when connected
-    if (connected && !loading) {
-      console.log('[TimelineView] useEffect: Connected, loading events...');
-      loadCalendarEvents();
-    }
-  }, [connected, loading, loadCalendarEvents]);
+  const timeBlocks = getEvents(
+    view === 'day' ? startOfDay(currentDate) : view === 'week' ? startOfWeek(currentDate, { weekStartsOn: 1 }) : startOfMonth(currentDate),
+    view === 'day' ? endOfDay(currentDate) : view === 'week' ? endOfWeek(currentDate, { weekStartsOn: 1 }) : endOfMonth(currentDate)
+  );
 
   const formatDateRange = () => {
     if (view === 'day') {
@@ -522,17 +345,14 @@ export function TimelineView() {
         },
       });
       
-      // Reload events
       await loadCalendarEvents();
     } catch (err: any) {
       console.error('Error updating event:', err);
-      setError(err.message || 'Failed to update event');
     }
   };
 
-  // Combine loading states
-  const isLoading = loading || (connected && timeBlocks.length === 0 && !error);
-  
+  const isLoading = calendarLoading || mcpLoading;
+
   if (isLoading && timeBlocks.length === 0) {
     return (
       <Card className="p-4">
@@ -577,14 +397,6 @@ export function TimelineView() {
             onClick={() => {
               const today = getToday();
               setCurrentDate(today);
-              // If in week/month view, navigate to the period containing today
-              if (view === 'week') {
-                setCurrentDate(startOfWeek(today, { weekStartsOn: 1 }));
-              } else if (view === 'month') {
-                setCurrentDate(startOfMonth(today));
-              } else {
-                setCurrentDate(today);
-              }
             }}
             className="h-7 px-2 text-xs"
           >
@@ -603,38 +415,21 @@ export function TimelineView() {
             size="sm"
             variant="ghost"
             onClick={loadCalendarEvents}
-            disabled={loading || !connected}
+            disabled={isLoading}
             className="h-6 w-6 p-0"
           >
-            <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />
           </Button>
         </div>
       </div>
 
-      {(error || mcpError) && !connected && (
-        <div className="mb-4 p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20">
-          <p className="text-sm text-yellow-600 mb-2">
-            {mcpError || error || 'Unable to connect to Google Calendar'}
-          </p>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={connect}
-            disabled={loading}
-            className="h-7 text-xs"
-          >
-            Connect Google Calendar
-          </Button>
-        </div>
-      )}
-
-      {(error || mcpError) && connected && (
+      {(calendarError || mcpError) && (
         <div className="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20">
-          <p className="text-sm text-red-600">{error || mcpError}</p>
+          <p className="text-sm text-red-600">{calendarError || mcpError}</p>
         </div>
       )}
 
-      {timeBlocks.length === 0 && !loading && !error && (
+      {timeBlocks.length === 0 && !isLoading && (
         <div className="text-center py-8 text-sm text-muted-foreground">
           No events scheduled {view === 'day' ? 'for this day' : view === 'week' ? 'for this week' : 'for this month'}
         </div>

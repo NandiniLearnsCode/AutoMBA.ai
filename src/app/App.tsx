@@ -14,6 +14,7 @@ import { ChatInputCard } from "@/app/components/ChatInputCard";
 import { ProfileSection } from "@/app/components/ProfileSection";
 import { Settings } from "@/app/components/Settings";
 import { McpProvider } from "@/contexts/McpContext";
+import { CalendarProvider, useCalendar } from "@/contexts/CalendarContext";
 import { getMcpServerConfigs } from "@/config/mcpServers";
 import { toast } from "sonner";
 import { generateAIRecommendations, AIRecommendation } from "@/utils/aiRecommendationService";
@@ -25,7 +26,10 @@ import { PriorityRanking, defaultPriorities, PriorityItem } from "@/app/componen
 function AppContent() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const chatbotRef = useRef<{ handleSendMessage: (message: string) => void } | null>(null);
-  
+
+  // Shared selected date state for CommandCenter and TimelineView
+  const [selectedDate, setSelectedDate] = useState(() => getToday());
+
   // AI-generated recommendations
   const [suggestions, setSuggestions] = useState<
     Array<{
@@ -43,46 +47,19 @@ function AppContent() {
   
   // MCP server for calendar operations
   const { connected, callTool, connect } = useMcpServer('google-calendar');
+  const { getEvents, fetchEvents } = useCalendar();
 
   // Generate AI recommendations on mount
   useEffect(() => {
     const generateRecommendations = async () => {
-      if (!connected) {
-        await connect();
-        return;
-      }
-
       try {
         setLoadingRecommendations(true);
         const today = getToday();
         const dayStart = startOfDay(today);
         const dayEnd = endOfDay(today);
         
-        dayStart.setHours(0, 0, 0, 0);
-        dayEnd.setHours(23, 59, 59, 999);
-
-        // Load today's events
-        const response = await callTool('list_events', {
-          calendarId: 'primary',
-          timeMin: dayStart.toISOString(),
-          timeMax: dayEnd.toISOString(),
-          maxResults: 50,
-        });
-
-        // Parse events
-        let calendarEvents: any[] = [];
-        if (Array.isArray(response)) {
-          const textContent = response.find((item: any) => item.type === 'text');
-          if (textContent?.text) {
-            try {
-              calendarEvents = JSON.parse(textContent.text);
-            } catch (e) {
-              console.error('Error parsing calendar events:', e);
-            }
-          } else if (response.length > 0 && typeof response[0] === 'object' && 'id' in response[0]) {
-            calendarEvents = response;
-          }
-        }
+        await fetchEvents(dayStart, dayEnd);
+        const calendarEvents = getEvents(dayStart, dayEnd);
 
         // Convert to format expected by AI service
         const eventsForAI = calendarEvents
@@ -173,17 +150,10 @@ function AppContent() {
       }
     };
 
-    if (connected) {
-      generateRecommendations();
-      
-      // Refresh recommendations every 5 minutes to stay contextually aware
-      const refreshInterval = setInterval(() => {
-        generateRecommendations();
-      }, 5 * 60 * 1000); // 5 minutes
-      
-      return () => clearInterval(refreshInterval);
-    }
-  }, [connected, callTool, connect]);
+    generateRecommendations();
+    // Only run once on mount, or when explicitly triggered
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Empty deps to prevent infinite loops
 
   const handleAcceptSuggestion = async (id: string, suggestionData?: {
     assignmentId?: string;
@@ -349,7 +319,7 @@ function AppContent() {
       {/* Main Content - Single Column Vertical Feed */}
       <main className="max-w-4xl mx-auto px-6 py-6 space-y-6">
         {/* Hero Section: Day at a Glance */}
-        <CommandCenter />
+        <CommandCenter selectedDate={selectedDate} />
 
         {/* Priority Ranking */}
         <div className="space-y-2">
@@ -413,7 +383,7 @@ function AppContent() {
         )}
 
         {/* Calendar: Timeline View */}
-        <TimelineView />
+        <TimelineView selectedDate={selectedDate} onDateChange={setSelectedDate} />
 
         {/* Canvas Assignments */}
         <AssignmentGrid />
@@ -452,7 +422,9 @@ export default function App() {
 
   return (
     <McpProvider servers={mcpServers}>
-      <AppContent />
+      <CalendarProvider>
+        <AppContent />
+      </CalendarProvider>
     </McpProvider>
   );
 }
