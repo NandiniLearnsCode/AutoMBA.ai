@@ -8,11 +8,12 @@ import { Input } from "@/app/components/ui/input";
 import { Badge } from "@/app/components/ui/badge";
 import { ScrollArea } from "@/app/components/ui/scroll-area";
 import { motion, AnimatePresence } from "motion/react";
-import { getOpenAIApiKey } from "@/config/apiKey";
+import { getOpenAIApiKey, OPENAI_CHAT_MODEL } from "@/config/apiKey";
 import { useMcpServer } from "@/hooks/useMcpServer";
 import { useCalendar } from "@/contexts/CalendarContext";
 import { format, startOfWeek, endOfWeek, addDays, addWeeks, addMonths, startOfDay, endOfDay, startOfMonth, endOfMonth } from "date-fns";
 import { getToday } from "@/utils/dateUtils";
+import { searchRelevantChunks, formatChunksForPrompt, initializeEmbeddings } from "@/utils/ragService";
 
 // ParsedEvent type (matching the format from googleCalendar.ts)
 interface ParsedEvent {
@@ -50,7 +51,7 @@ interface Message {
   content: string;
   timestamp: Date;
   action?: {
-    type: "move" | "cancel" | "add" | "suggest";
+    type: "move" | "cancel" | "add" | "suggest" | "priority-change";
     details: string;
     status: "pending" | "approved" | "rejected" | "auto-executed";
     userRequest?: string; // Store the original user request for parsing
@@ -59,16 +60,21 @@ interface Message {
     eventId?: string; // For undo functionality
     priority?: "hard-block" | "flexible" | "optional"; // Hard Block vs Nice to Have
     googleCalendarLink?: string; // Deep link to Google Calendar event
+    newPriorityOrder?: string[]; // For priority-change actions
   };
 }
+
+// Priority types matching PriorityRanking component
+type PriorityType = "recruiting" | "socials" | "sleep" | "clubs" | "homework";
 
 interface NexusChatbotProps {
   onScheduleChange?: (action: string, details: any) => void;
   onSendMessageFromExternal?: (message: string) => void;
+  onPriorityChange?: (newOrder: string[]) => void; // Callback for priority changes
   isHidden?: boolean; // For inline chat mode
 }
 
-export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHidden = false }: NexusChatbotProps) {
+export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, onPriorityChange, isHidden = false }: NexusChatbotProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState("");
@@ -78,6 +84,11 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
     lastUpdate?: Date;
     lastEvents?: ParsedEvent[];
     lastAction?: string;
+    pendingEvent?: {
+      title: string;
+      durationMinutes: number;
+      originalDate: Date;
+    };
   }>({}); // Maintain session state to prevent amnesia
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -363,6 +374,13 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
     }
   }, []);
 
+  // Initialize RAG embeddings on mount (async, non-blocking)
+  useEffect(() => {
+    initializeEmbeddings().catch(error => {
+      console.warn('[Chatbot] RAG initialization failed (will retry on first query):', error);
+    });
+  }, []);
+
   // Keep messagesRef in sync with messages state for reliable access in callbacks
   useEffect(() => {
     messagesRef.current = messages;
@@ -416,6 +434,110 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
     return suggestions;
   }, []);
 
+  // Helper function to find available time slots based on activity type and existing events
+  const findAvailableTimeSlots = useCallback((
+    activityType: string,
+    existingEvents: ParsedEvent[],
+    targetDate: Date,
+    durationMinutes: number = 60
+  ): { time: string; label: string }[] => {
+    const slots: { time: string; label: string }[] = [];
+    const lowerActivity = activityType.toLowerCase();
+
+    // Define preferred time ranges based on activity type
+    let preferredRanges: { start: number; end: number; label: string }[] = [];
+
+    if (/dinner|supper|evening meal/i.test(lowerActivity)) {
+      preferredRanges = [
+        { start: 18, end: 21, label: "Evening" },
+        { start: 19, end: 22, label: "Late Evening" },
+      ];
+    } else if (/lunch|midday meal/i.test(lowerActivity)) {
+      preferredRanges = [
+        { start: 11, end: 14, label: "Midday" },
+        { start: 12, end: 15, label: "Afternoon" },
+      ];
+    } else if (/breakfast|morning meal/i.test(lowerActivity)) {
+      preferredRanges = [
+        { start: 7, end: 10, label: "Morning" },
+        { start: 8, end: 11, label: "Late Morning" },
+      ];
+    } else if (/gym|workout|exercise|fitness|run|jog/i.test(lowerActivity)) {
+      preferredRanges = [
+        { start: 6, end: 9, label: "Early Morning" },
+        { start: 17, end: 20, label: "Evening" },
+        { start: 12, end: 14, label: "Lunch Break" },
+      ];
+    } else if (/study|homework|assignment|reading/i.test(lowerActivity)) {
+      preferredRanges = [
+        { start: 9, end: 12, label: "Morning" },
+        { start: 14, end: 17, label: "Afternoon" },
+        { start: 19, end: 22, label: "Evening" },
+      ];
+    } else if (/meeting|call|interview/i.test(lowerActivity)) {
+      preferredRanges = [
+        { start: 9, end: 12, label: "Morning" },
+        { start: 13, end: 17, label: "Afternoon" },
+      ];
+    } else if (/coffee|tea|break/i.test(lowerActivity)) {
+      preferredRanges = [
+        { start: 10, end: 11, label: "Mid-Morning" },
+        { start: 15, end: 16, label: "Afternoon" },
+      ];
+    } else {
+      // Default: business hours
+      preferredRanges = [
+        { start: 9, end: 12, label: "Morning" },
+        { start: 13, end: 17, label: "Afternoon" },
+        { start: 18, end: 21, label: "Evening" },
+      ];
+    }
+
+    // Get busy times for the target date
+    const targetDateStr = format(targetDate, 'yyyy-MM-dd');
+    const busySlots = existingEvents
+      .filter(e => e.startDate && format(e.startDate, 'yyyy-MM-dd') === targetDateStr)
+      .map(e => ({
+        start: e.startDate.getHours() * 60 + e.startDate.getMinutes(),
+        end: (e.endDate || e.startDate).getHours() * 60 + (e.endDate || e.startDate).getMinutes() + (e.endDate ? 0 : e.duration),
+      }));
+
+    // Find available slots in preferred ranges
+    for (const range of preferredRanges) {
+      // Check each 30-minute interval in the range
+      for (let hour = range.start; hour < range.end; hour++) {
+        for (const minute of [0, 30]) {
+          const slotStart = hour * 60 + minute;
+          const slotEnd = slotStart + durationMinutes;
+
+          // Skip if slot extends beyond the range
+          if (slotEnd > range.end * 60) continue;
+
+          // Check if slot conflicts with any existing event
+          const hasConflict = busySlots.some(busy =>
+            (slotStart < busy.end && slotEnd > busy.start)
+          );
+
+          if (!hasConflict) {
+            const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+            const displayTime = format(new Date(2000, 0, 1, hour, minute), 'h:mm a');
+            slots.push({
+              time: timeStr,
+              label: `${displayTime} (${range.label})`,
+            });
+
+            // Only add a few slots per range
+            if (slots.filter(s => s.label.includes(range.label)).length >= 2) break;
+          }
+        }
+        if (slots.filter(s => s.label.includes(range.label)).length >= 2) break;
+      }
+    }
+
+    // Limit to top 3 suggestions
+    return slots.slice(0, 3);
+  }, []);
+
   const scrollToBottom = () => {
     // Use setTimeout to ensure DOM is updated
     setTimeout(() => {
@@ -436,9 +558,10 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
   }, [isOpen]);
 
   const callOpenAI = async (
-    userMessage: string, 
+    userMessage: string,
     conversationHistory: Array<{role: string, content: string}>,
-    calendarContext?: ParsedEvent[]
+    calendarContext?: ParsedEvent[],
+    userPriorities?: string[]
   ): Promise<string> => {
     const apiKey = getOpenAIApiKey();
     if (!apiKey) {
@@ -447,6 +570,25 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
 
     const today = getToday();
     const todayStr = format(today, 'EEEE, MMMM d, yyyy');
+    const currentMonth = today.getMonth();
+
+    // RAG: Search for relevant playbook knowledge
+    let playbookKnowledge = '';
+    try {
+      const recentEventTypes = calendarContext?.slice(0, 5).map(e => e.type) || [];
+      const relevantChunks = await searchRelevantChunks(userMessage, 3, {
+        currentMonth,
+        priorities: userPriorities,
+        recentEventTypes: [...new Set(recentEventTypes)],
+      });
+
+      if (relevantChunks.length > 0) {
+        playbookKnowledge = '\n\n' + formatChunksForPrompt(relevantChunks);
+        console.log('[Chatbot] RAG: Found', relevantChunks.length, 'relevant playbook chunks');
+      }
+    } catch (ragError) {
+      console.warn('[Chatbot] RAG search failed, continuing without playbook knowledge:', ragError);
+    }
 
     let calendarContextText = '';
     if (calendarContext && calendarContext.length > 0) {
@@ -491,13 +633,17 @@ ${formattedEvents}
 1. Answer questions about the user's schedule (using ONLY the calendar data provided below)
 2. Help add, move, or remove calendar events
 3. Have friendly conversations about anything
+4. Provide strategic MBA advice based on the kAIsey Protocol playbook
 
 **Core Principles:**
 - Be concise and conversational
+- Act as a Chief of Staff - direct, strategic, empathetic but firm
+- Use MBA vernacular when appropriate (ROI, bandwidth, opportunity cost, MECE)
 - When discussing schedule, ONLY mention events that are explicitly listed in the calendar data below
 - If no events are listed, say so honestly - do NOT invent fake events
 - Not every message needs a scheduling action - sometimes users just want to chat or ask questions
 ${calendarContextText}
+${playbookKnowledge}
 
 **When the user asks about their schedule:**
 - Look at the CALENDAR EVENTS section above
@@ -507,6 +653,12 @@ ${calendarContextText}
 **When the user wants to add/schedule something:**
 - Acknowledge the request and confirm what you'll add
 - Be helpful about suggesting times if they don't specify one
+- Consider event tier priorities from the playbook (Tier 1 > Tier 2 > Tier 3 > Tier 4)
+
+**When giving advice:**
+- Reference the MBA Playbook concepts when relevant (event tiers, recruiting phases, FOMO filter, etc.)
+- Consider the current recruiting phase based on the month
+- Factor in biometric/recovery concerns if the user mentions being tired or exhausted
 
 **NEVER:**
 - Invent or hallucinate events that aren't in the calendar data
@@ -521,14 +673,14 @@ ${calendarContextText}
           "Authorization": `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: "gpt-4o-mini",
+          model: OPENAI_CHAT_MODEL,
           messages: [
             { role: "system", content: systemPrompt },
             ...conversationHistory,
             { role: "user", content: userMessage },
           ],
           temperature: 0.4, // Reduced for more factual, less creative responses
-          max_tokens: 500,
+          max_completion_tokens: 500,
         }),
       });
 
@@ -635,9 +787,14 @@ ${calendarContextText}
       const eventsArray = Array.isArray(relevantEvents) ? relevantEvents : [];
       console.log('[Chatbot] Passing', eventsArray.length, 'events to callOpenAI');
 
-      // Call OpenAI API with calendar context and session state
+      // Call OpenAI API with calendar context, session state, and RAG playbook knowledge
       const userMessageWithContext = messageToSend + sessionContext;
-      const aiResponse = await callOpenAI(userMessageWithContext, conversationHistory, eventsArray.length > 0 ? eventsArray : undefined);
+      const aiResponse = await callOpenAI(
+        userMessageWithContext,
+        conversationHistory,
+        eventsArray.length > 0 ? eventsArray : undefined,
+        undefined // priorities - could be passed as prop in future
+      );
 
       // Parse response to determine if it's an action or regular message
       // Only mark as action if it's clearly proposing a concrete, actionable change
@@ -649,22 +806,72 @@ ${calendarContextText}
       // Enhanced intent parsing for scheduling keywords
       const lowerInput = messageToSend.toLowerCase();
 
+      // Check for PRIORITY CHANGE intent - user wants to change their priorities
+      const hasPriorityChangeIntent = /\b(priorit(y|ies|ize)|focus|more important|most important|top priority|main focus|care more about|care less about|prefer|emphasis)\b/i.test(messageToSend) &&
+        /\b(recruiting|socials?|sleep|clubs?|homework|assignments?|networking|rest|study|studies|career|job|interview|party|parties|health|wellness)\b/i.test(messageToSend);
+
       // Check for QUERY intent first - these should NOT trigger any calendar actions
       // Queries are asking about the schedule, not modifying it
-      const hasQueryIntent = /\b(what('s| is| are)?|show|tell|list|summarize|summary|overview|how many|do i have|am i free|any(thing)?|events?( on| for| today| tomorrow| this| next)?)\b.*\b(schedule|calendar|events?|appointments?|plans?|busy|free|today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week)\b/i.test(messageToSend) ||
+      const hasQueryIntent = !hasPriorityChangeIntent && (
+        /\b(what('s| is| are)?|show|tell|list|summarize|summary|overview|how many|do i have|am i free|any(thing)?|events?( on| for| today| tomorrow| this| next)?)\b.*\b(schedule|calendar|events?|appointments?|plans?|busy|free|today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|this week|next week)\b/i.test(messageToSend) ||
         /\b(schedule|calendar|events?|plans?)\b.*\b(for|on|today|tomorrow|this|next)\b/i.test(messageToSend) && !/\b(add|create|schedule|book|set up|block)\b.*\b(for|at|on)\b/i.test(messageToSend) ||
-        /^(what|show|tell|list|summarize|how|do i|am i|any)/i.test(messageToSend.trim());
+        /^(what|show|tell|list|summarize|how|do i|am i|any)/i.test(messageToSend.trim())
+      );
 
       // Check for specific scheduling intents - expanded to include more common phrases
-      // BUT exclude if it's a query intent
-      const hasScheduleIntent = !hasQueryIntent && /\b(schedule|block time|study for)\b|add .* (at|to|for)|create .* (at|to|for)|put .* (at|on|in)|book|set up/i.test(messageToSend);
+      // BUT exclude if it's a query intent or priority change intent
+      const hasScheduleIntent = !hasQueryIntent && !hasPriorityChangeIntent && /\b(schedule|block time|study for)\b|add .* (at|to|for)|create .* (at|to|for)|put .* (at|on|in)|book|set up/i.test(messageToSend);
       const hasInsteadOfIntent = /instead of|replace/i.test(messageToSend);
-      const hasDeleteIntent = /delete|cancel|remove|clear/i.test(messageToSend) &&
+      const hasDeleteIntent = !hasPriorityChangeIntent && /delete|cancel|remove|clear/i.test(messageToSend) &&
         !/don't delete|don't cancel|don't remove/i.test(messageToSend);
-      const hasMoveIntent = !hasQueryIntent && /move|reschedule|shift|change.*(time|to \d)|push.*(to|back|forward)|edit|update|modify/i.test(messageToSend) &&
+      const hasMoveIntent = !hasQueryIntent && !hasPriorityChangeIntent && /move|reschedule|shift|change.*(time|to \d)|push.*(to|back|forward)|edit|update|modify/i.test(messageToSend) &&
         !/don't move|don't reschedule|don't change/i.test(messageToSend);
 
-      console.log('[Chatbot] Intent detection:', { hasQueryIntent, hasScheduleIntent, hasInsteadOfIntent, hasDeleteIntent, hasMoveIntent, lowerInput });
+      console.log('[Chatbot] Intent detection:', { hasPriorityChangeIntent, hasQueryIntent, hasScheduleIntent, hasInsteadOfIntent, hasDeleteIntent, hasMoveIntent, lowerInput });
+
+      // Handle PRIORITY CHANGE intent - ask for approval before changing priorities
+      if (hasPriorityChangeIntent) {
+        console.log('[Chatbot] User has PRIORITY CHANGE intent');
+
+        // Use AI to determine the new priority order
+        const newPriorityOrder = await extractPriorityOrderWithAI(messageToSend);
+
+        if (newPriorityOrder && newPriorityOrder.length === 5) {
+          // Create a human-readable description of the change
+          const priorityLabels: Record<string, string> = {
+            recruiting: "Recruiting",
+            socials: "Socials",
+            sleep: "Sleep",
+            clubs: "Clubs",
+            homework: "Homework",
+          };
+
+          const newOrderLabels = newPriorityOrder.map((id, index) => `${index + 1}. ${priorityLabels[id] || id}`).join("\n");
+
+          const priorityChangeMessage: Message = {
+            id: messageId,
+            type: "action",
+            content: `I understand you want to change your priorities. Here's the new order I'll set:\n\n${newOrderLabels}\n\nWould you like me to update your priorities and regenerate recommendations based on this new order?`,
+            timestamp: new Date(),
+            action: {
+              type: "priority-change",
+              details: "Update priority order",
+              status: "pending",
+              userRequest: messageToSend,
+              newPriorityOrder: newPriorityOrder,
+            },
+          };
+
+          setMessages((prev) => [...prev, priorityChangeMessage]);
+          setIsTyping(false);
+          isProcessingRef.current = false;
+          currentMessageIdRef.current = null;
+          return;
+        } else {
+          // Couldn't determine new order, show AI response instead
+          console.log('[Chatbot] Could not determine new priority order, showing AI response');
+        }
+      }
       
       // More conservative detection - only mark as action if it's proposing a specific action
       const actionPatterns = {
@@ -759,7 +966,8 @@ ${calendarContextText}
         console.log('[Chatbot] Auto-execute ADD: using AI to extract event details...');
 
         // Use AI to extract smart event details with calendar context
-        const eventDetails = await extractEventDetailsWithAI(messageToSend, eventsArray)
+        // Pass pending event context for follow-up "schedule it at X" messages
+        const eventDetails = await extractEventDetailsWithAI(messageToSend, eventsArray, sessionState.pendingEvent)
           || parseEventDetails(messageToSend); // Fallback to basic parsing
 
         console.log('[Chatbot] Auto-execute: extracted event details:', eventDetails);
@@ -778,11 +986,43 @@ ${calendarContextText}
 
           if (conflictingEvent) {
             console.log('[Chatbot] Auto-execute: Conflict detected with:', conflictingEvent.title);
-            // Don't auto-execute, show conflict message instead
+
+            // Find alternative time slots based on the activity type
+            const durationMinutes = Math.round((eventDetails.end.getTime() - eventDetails.start.getTime()) / (1000 * 60));
+            const alternativeSlots = findAvailableTimeSlots(
+              eventDetails.title,
+              eventsArray,
+              eventDetails.start,
+              durationMinutes
+            );
+
+            // Save pending event for follow-up "schedule it at X" messages
+            setSessionState(prev => ({
+              ...prev,
+              pendingEvent: {
+                title: eventDetails.title,
+                durationMinutes: durationMinutes,
+                originalDate: eventDetails.start,
+              }
+            }));
+
+            // Build suggestion message with alternatives
+            let suggestionText = `I can't add "${eventDetails.title}" at ${format(eventDetails.start, 'h:mm a')} because you already have "${conflictingEvent.title}" scheduled at that time.`;
+
+            if (alternativeSlots.length > 0) {
+              suggestionText += `\n\n**Available time slots for ${eventDetails.title}:**\n`;
+              alternativeSlots.forEach((slot, index) => {
+                suggestionText += `${index + 1}. ${slot.label}\n`;
+              });
+              suggestionText += `\nJust say something like "schedule it at ${alternativeSlots[0].label.split(' (')[0]}" to book one of these times.`;
+            } else {
+              suggestionText += ` Please specify a different time.`;
+            }
+
             const conflictMessage: Message = {
               id: messageId,
               type: "agent",
-              content: `I can't add "${eventDetails.title}" at ${format(eventDetails.start, 'h:mm a')} because you already have "${conflictingEvent.title}" scheduled at that time. Please specify a different time.`,
+              content: suggestionText,
               timestamp: new Date(),
             };
             setMessages((prev) => [...prev, conflictMessage]);
@@ -844,6 +1084,7 @@ ${calendarContextText}
                 lastUpdate: new Date(),
                 lastEvents: updatedEvents,
                 lastAction: "add",
+                pendingEvent: undefined, // Clear pending event after successful creation
               }));
 
               // Import toast for undo functionality
@@ -1089,7 +1330,8 @@ ${calendarContextText}
   // AI-powered event extraction - uses LLM to intelligently extract event details
   const extractEventDetailsWithAI = async (
     userRequest: string,
-    calendarEvents: ParsedEvent[]
+    calendarEvents: ParsedEvent[],
+    pendingEvent?: { title: string; durationMinutes: number; originalDate: Date }
   ): Promise<{ title: string; start: Date; end: Date } | null> => {
     const apiKey = getOpenAIApiKey();
     if (!apiKey) return null;
@@ -1123,10 +1365,19 @@ ${calendarContextText}
         dayName: format(e.startDate, 'EEEE')
       }));
 
+    // Build pending event context for follow-up messages
+    const pendingEventContext = pendingEvent
+      ? `\n**IMPORTANT CONTEXT - Pending Event from Previous Conflict:**
+The user previously tried to create "${pendingEvent.title}" (duration: ${pendingEvent.durationMinutes} minutes) on ${format(pendingEvent.originalDate, 'yyyy-MM-dd')} but had a conflict.
+If the user says "schedule it at X" or "book it at X" or just specifies a time, they are referring to this pending event.
+Use the title "${pendingEvent.title}" and duration ${pendingEvent.durationMinutes} minutes.
+Only the date should default to ${format(pendingEvent.originalDate, 'yyyy-MM-dd')} unless they specify a different date.\n`
+      : '';
+
     const prompt = `Extract event details from the user's request. Return ONLY valid JSON.
 
 User request: "${userRequest}"
-
+${pendingEventContext}
 **DATE REFERENCE (use these exact dates):**
 - Today: ${todayStr} (${todayDayName})
 - Tomorrow: ${tomorrowStr}
@@ -1134,11 +1385,12 @@ ${dayReferences.map(d => `- ${d}`).join('\n')}
 
 Current time: ${currentHour}:00
 
-**Existing calendar events:**
-${busyTimes.length > 0 ? busyTimes.map(e => `- ${e.title} on ${e.date} (${e.dayName}) at ${e.time}`).join('\n') : 'No events scheduled'}
+**Existing calendar events (AVOID scheduling conflicts with these):**
+${busyTimes.length > 0 ? busyTimes.map(e => `- ${e.title} on ${e.date} (${e.dayName}) at ${e.time} for ${e.duration} minutes`).join('\n') : 'No events scheduled'}
 
 **Instructions:**
 1. Extract a clear, concise event TITLE (e.g., "Dinner", "Gym Session", "Study Time")
+   - **If there's a pending event context above and user says "it", "that", "schedule it", etc., use the pending event title!**
 2. Determine the DATE:
    - Use the DATE REFERENCE above to convert day names to actual dates
    - "tomorrow" = ${tomorrowStr}
@@ -1146,11 +1398,31 @@ ${busyTimes.length > 0 ? busyTimes.map(e => `- ${e.title} on ${e.date} (${e.dayN
    - If user says "Monday", "Tuesday", etc., use the corresponding date from DATE REFERENCE
    - If user specifies a specific date like "January 25" or "1/25", use that date
    - Default to today (${todayStr}) only if no date/day is mentioned
-3. Determine the TIME:
+   - **If pending event context exists and no date mentioned, use the pending event's original date**
+3. Determine the TIME (IMPORTANT - be context-aware):
    - If user specifies a time (e.g., "at 3pm", "at 15:00"), use it exactly
    - Convert 12-hour to 24-hour format (3pm = 15:00, 9am = 09:00)
-   - If no time specified, pick a reasonable time (morning activities: 09:00, lunch: 12:00, dinner: 18:00, evening: 19:00)
-4. Determine DURATION (default 60 minutes unless specified)
+   - **If NO time specified, use these CONTEXT-AWARE defaults based on activity type:**
+     * Breakfast/morning meal: 08:00-09:00
+     * Gym/workout/exercise/run: 07:00 (morning) or 18:00 (evening)
+     * Lunch/midday meal: 12:00-13:00
+     * Coffee/tea break: 10:00 or 15:00
+     * Study/homework/reading: 09:00 (morning), 14:00 (afternoon), or 19:00 (evening)
+     * Meeting/call/interview: 10:00 or 14:00 (business hours)
+     * Dinner/supper/evening meal: 18:00-19:00
+     * Drinks/happy hour/bar: 18:00-19:00
+     * Movie/entertainment: 19:00-20:00
+     * Generic events: 10:00 (if morning context) or 14:00 (default)
+   - **CRITICAL: Check existing events and pick a time that does NOT conflict!**
+   - If the preferred time conflicts, shift by 30-60 minutes to find an open slot
+4. Determine DURATION based on activity type:
+   - Meals (breakfast/lunch/dinner): 60-90 minutes
+   - Gym/workout: 60-90 minutes
+   - Coffee/break: 30 minutes
+   - Study session: 60-120 minutes
+   - Meeting: 60 minutes
+   - Default: 60 minutes
+   - **If pending event context exists, use the pending event's duration**
 
 Return ONLY this JSON format, no other text:
 {"title": "Event Name", "date": "YYYY-MM-DD", "time": "HH:MM", "durationMinutes": 60}`;
@@ -1163,10 +1435,10 @@ Return ONLY this JSON format, no other text:
           "Authorization": `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: "gpt-4o-mini",
+          model: OPENAI_CHAT_MODEL,
           messages: [{ role: "user", content: prompt }],
           temperature: 0.3,
-          max_tokens: 150,
+          max_completion_tokens: 150,
         }),
       });
 
@@ -1297,10 +1569,10 @@ If no match found, return: {"eventIndex": null}`;
           "Authorization": `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: "gpt-4o-mini",
+          model: OPENAI_CHAT_MODEL,
           messages: [{ role: "user", content: prompt }],
           temperature: 0.1,
-          max_tokens: 100,
+          max_completion_tokens: 100,
         }),
       });
 
@@ -1327,6 +1599,86 @@ If no match found, return: {"eventIndex": null}`;
       };
     } catch (error) {
       console.error('[Chatbot] AI event finding failed:', error);
+      return null;
+    }
+  };
+
+  // AI-powered priority extraction - uses LLM to determine new priority order from user request
+  const extractPriorityOrderWithAI = async (
+    userRequest: string
+  ): Promise<string[] | null> => {
+    const apiKey = getOpenAIApiKey();
+    if (!apiKey) return null;
+
+    const prompt = `Analyze the user's request and determine their new priority order for these 5 categories:
+- recruiting (job search, interviews, networking for career)
+- socials (parties, social events, friends)
+- sleep (rest, health, wellness)
+- clubs (student organizations, extracurriculars)
+- homework (assignments, studying, academics)
+
+User request: "${userRequest}"
+
+**Instructions:**
+1. Determine which category the user wants to prioritize MORE (move up in ranking)
+2. Determine which category the user wants to prioritize LESS (move down in ranking)
+3. Return a NEW ordering of all 5 categories based on the user's intent
+4. The default order is: recruiting, socials, sleep, clubs, homework
+5. If user says "focus on X" or "X is most important" - put X first
+6. If user says "care less about X" or "X is less important" - move X down
+7. Keep other items in relative order
+
+**Examples:**
+- "I want to focus more on sleep" → sleep should be #1
+- "recruiting is my top priority now" → recruiting should be #1
+- "I care less about socials, homework is more important" → homework up, socials down
+- "I need to prioritize clubs and homework over recruiting" → clubs, homework up, recruiting down
+
+Return ONLY a JSON array with the 5 category IDs in the new order, no other text:
+["first_priority", "second_priority", "third_priority", "fourth_priority", "fifth_priority"]`;
+
+    try {
+      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: OPENAI_CHAT_MODEL,
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.2,
+          max_completion_tokens: 100,
+        }),
+      });
+
+      if (!response.ok) return null;
+
+      const data = await response.json();
+      const content = data.choices[0]?.message?.content?.trim();
+
+      // Parse JSON array from response
+      const jsonMatch = content.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) return null;
+
+      const parsed = JSON.parse(jsonMatch[0]);
+
+      // Validate that all 5 priorities are present
+      const validPriorities = ["recruiting", "socials", "sleep", "clubs", "homework"];
+      if (!Array.isArray(parsed) || parsed.length !== 5) return null;
+
+      const allValid = parsed.every((p: string) => validPriorities.includes(p));
+      const allUnique = new Set(parsed).size === 5;
+
+      if (!allValid || !allUnique) {
+        console.error('[Chatbot] Invalid priority order from AI:', parsed);
+        return null;
+      }
+
+      console.log('[Chatbot] AI extracted new priority order:', parsed);
+      return parsed;
+    } catch (error) {
+      console.error('[Chatbot] AI priority extraction failed:', error);
       return null;
     }
   };
@@ -1384,10 +1736,10 @@ If no match found, return: {"eventIndex": null}`;
           "Authorization": `Bearer ${apiKey}`,
         },
         body: JSON.stringify({
-          model: "gpt-4o-mini",
+          model: OPENAI_CHAT_MODEL,
           messages: [{ role: "user", content: prompt }],
           temperature: 0.1,
-          max_tokens: 100,
+          max_completion_tokens: 100,
         }),
       });
 
@@ -1535,19 +1887,67 @@ If no match found, return: {"eventIndex": null}`;
     if (message?.action) {
       console.log('[Chatbot] Executing action type:', message.action.type, 'userRequest:', message.action.userRequest);
       try {
-        // Ensure connected to MCP
+        // Handle priority-change action (doesn't need MCP connection)
+        if (message.action.type === "priority-change" && message.action.newPriorityOrder) {
+          console.log('[Chatbot] Executing priority change:', message.action.newPriorityOrder);
+
+          // Call the onPriorityChange callback if provided
+          if (onPriorityChange) {
+            onPriorityChange(message.action.newPriorityOrder);
+          }
+
+          // Also expose via window for components that use window-based communication
+          if ((window as any).__nexusChatbotOnPriorityChange) {
+            (window as any).__nexusChatbotOnPriorityChange(message.action.newPriorityOrder);
+          }
+
+          // Show success message
+          const priorityLabels: Record<string, string> = {
+            recruiting: "Recruiting",
+            socials: "Socials",
+            sleep: "Sleep",
+            clubs: "Clubs",
+            homework: "Homework",
+          };
+          const newOrderText = message.action.newPriorityOrder
+            .map((id, index) => `${index + 1}. ${priorityLabels[id] || id}`)
+            .join(", ");
+
+          setTimeout(() => {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: Date.now().toString(),
+                type: "agent",
+                content: `Great! I've updated your priorities to: ${newOrderText}. Your recommendations will now be tailored to focus on your top priorities.`,
+                timestamp: new Date(),
+              },
+            ]);
+          }, 500);
+
+          // Import toast for notification
+          const { toast: toastFn } = await import("sonner");
+          toastFn.success("Priorities updated!", {
+            description: `Now focusing on: ${priorityLabels[message.action.newPriorityOrder[0]]}`,
+          });
+
+          return; // Priority change handled, exit early
+        }
+
+        // Ensure connected to MCP for calendar operations
         if (!connected) {
           await connect();
         }
-        
+
         let createdEventId: string | undefined;
         let googleCalendarLink: string | undefined;
-        
+
         // Execute calendar operation based on action type
         if (message.action.type === "add" && message.action.userRequest) {
           // First try AI extraction which is smarter about understanding context
           // Then fall back to basic parsing
-          const eventDetails = await extractEventDetailsWithAI(message.action.userRequest, calendarEvents)
+          // Pass pending event context for follow-up "schedule it at X" messages
+          const eventDetails = await extractEventDetailsWithAI(message.action.userRequest, calendarEvents, sessionState.pendingEvent)
             || parseEventDetails(message.action.userRequest);
 
           if (eventDetails) {
@@ -1566,13 +1966,46 @@ If no match found, return: {"eventIndex": null}`;
 
             if (conflictingEvent) {
               console.log('[Chatbot] Conflict detected with:', conflictingEvent.title);
+
+              // Find alternative time slots based on the activity type
+              const durationMinutes = Math.round((eventEnd - eventStart) / (1000 * 60));
+              const alternativeSlots = findAvailableTimeSlots(
+                eventDetails.title,
+                calendarEvents,
+                eventDetails.start,
+                durationMinutes
+              );
+
+              // Save pending event for follow-up "schedule it at X" messages
+              setSessionState(prev => ({
+                ...prev,
+                pendingEvent: {
+                  title: eventDetails.title,
+                  durationMinutes: durationMinutes,
+                  originalDate: eventDetails.start,
+                }
+              }));
+
+              // Build suggestion message with alternatives
+              let conflictMessage = `I can't create "${eventDetails.title}" at ${format(eventDetails.start, 'h:mm a')} because you already have "${conflictingEvent.title}" scheduled at that time.`;
+
+              if (alternativeSlots.length > 0) {
+                conflictMessage += `\n\n**Available time slots for ${eventDetails.title}:**\n`;
+                alternativeSlots.forEach((slot, index) => {
+                  conflictMessage += `${index + 1}. ${slot.label}\n`;
+                });
+                conflictMessage += `\nJust say something like "schedule it at ${alternativeSlots[0].label.split(' (')[0]}" to book one of these times.`;
+              } else {
+                conflictMessage += ` Please specify a different time.`;
+              }
+
               setTimeout(() => {
                 setMessages((prev) => [
                   ...prev,
                   {
                     id: Date.now().toString(),
                     type: "agent",
-                    content: `I can't create this event because it conflicts with "${conflictingEvent.title}" at ${conflictingEvent.time}. Please specify a different time, like "add dinner at 8pm" or "schedule dinner for 6pm".`,
+                    content: conflictMessage,
                     timestamp: new Date(),
                   },
                 ]);
@@ -1616,6 +2049,7 @@ If no match found, return: {"eventIndex": null}`;
               lastUpdate: new Date(),
               lastEvents: updatedEvents,
               lastAction: "add",
+              pendingEvent: undefined, // Clear pending event after successful creation
             }));
             
             // Refresh greeting with updated events
@@ -1647,8 +2081,8 @@ If no match found, return: {"eventIndex": null}`;
           // Handle move/reschedule
           console.log('[Chatbot] Move action - eventId:', message.action.eventId, 'userRequest:', message.action.userRequest);
 
-          // Use AI to extract new time details
-          const eventDetails = await extractEventDetailsWithAI(message.action.userRequest, calendarEvents)
+          // Use AI to extract new time details (no pending event context for moves)
+          const eventDetails = await extractEventDetailsWithAI(message.action.userRequest, calendarEvents, undefined)
             || parseEventDetails(message.action.userRequest);
 
           if (!message.action.eventId) {
@@ -1676,6 +2110,58 @@ If no match found, return: {"eventIndex": null}`;
                   id: Date.now().toString(),
                   type: "agent",
                   content: "Sorry, I couldn't understand the new time. Please specify when you'd like to reschedule to, like 'move gym to 3pm tomorrow'.",
+                  timestamp: new Date(),
+                },
+              ]);
+            }, 500);
+            return;
+          }
+
+          // Check for conflicts at the new time (excluding the event being moved)
+          const newStart = eventDetails.start.getTime();
+          const newEnd = eventDetails.end.getTime();
+          const moveConflict = calendarEvents.find(existingEvent => {
+            // Skip the event being moved
+            if (existingEvent.id === message.action.eventId) return false;
+            if (!existingEvent.startDate || !existingEvent.endDate) return false;
+            const existingStart = existingEvent.startDate.getTime();
+            const existingEnd = existingEvent.endDate.getTime();
+            return (newStart < existingEnd && newEnd > existingStart);
+          });
+
+          if (moveConflict) {
+            console.log('[Chatbot] Move conflict detected with:', moveConflict.title);
+
+            // Find alternative time slots
+            const durationMinutes = Math.round((newEnd - newStart) / (1000 * 60));
+            const eventTitle = message.action.eventTitle || 'this event';
+            const alternativeSlots = findAvailableTimeSlots(
+              eventTitle,
+              calendarEvents.filter(e => e.id !== message.action.eventId),
+              eventDetails.start,
+              durationMinutes
+            );
+
+            // Build suggestion message with alternatives
+            let conflictMessage = `I can't move "${eventTitle}" to ${format(eventDetails.start, 'h:mm a')} because you already have "${moveConflict.title}" scheduled at that time.`;
+
+            if (alternativeSlots.length > 0) {
+              conflictMessage += `\n\n**Available time slots:**\n`;
+              alternativeSlots.forEach((slot, index) => {
+                conflictMessage += `${index + 1}. ${slot.label}\n`;
+              });
+              conflictMessage += `\nJust say something like "move it to ${alternativeSlots[0].label.split(' (')[0]}" to reschedule.`;
+            } else {
+              conflictMessage += ` Please specify a different time.`;
+            }
+
+            setTimeout(() => {
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: Date.now().toString(),
+                  type: "agent",
+                  content: conflictMessage,
                   timestamp: new Date(),
                 },
               ]);
@@ -1883,6 +2369,7 @@ If no match found, return: {"eventIndex": null}`;
     (window as any).__nexusChatbotHandleApprove = handleApproveAction;
     (window as any).__nexusChatbotHandleReject = handleRejectAction;
     (window as any).__nexusChatbotGenerateSuggestions = generateInitialSuggestions;
+    (window as any).__nexusChatbotOnPriorityChange = onPriorityChange;
     (window as any).__nexusChatbotGenerateProactiveRecommendations = async () => {
       // Generate proactive recommendations when chat opens
       try {
@@ -1931,6 +2418,7 @@ If no match found, return: {"eventIndex": null}`;
       delete (window as any).__nexusChatbotHandleReject;
       delete (window as any).__nexusChatbotGenerateSuggestions;
       delete (window as any).__nexusChatbotGenerateProactiveRecommendations;
+      delete (window as any).__nexusChatbotOnPriorityChange;
     };
   }, [messages, isTyping, loadCalendarEvents, generateInitialSuggestions, generatePersonalizedGreeting, sessionState]);
 

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Bot, Bell, Settings as SettingsIcon } from "lucide-react";
+import { Bot, Settings as SettingsIcon } from "lucide-react";
 import { Button } from "@/app/components/ui/button";
 import { Badge } from "@/app/components/ui/badge";
 import { Toaster } from "@/app/components/ui/sonner";
@@ -16,7 +16,7 @@ import { McpProvider } from "@/contexts/McpContext";
 import { CalendarProvider, useCalendar } from "@/contexts/CalendarContext";
 import { getMcpServerConfigs } from "@/config/mcpServers";
 import { toast } from "sonner";
-import { generateAIRecommendations, AIRecommendation } from "@/utils/aiRecommendationService";
+import { generateAIRecommendations, AIRecommendation, UserPriority } from "@/utils/aiRecommendationService";
 import { useMcpServer } from "@/hooks/useMcpServer";
 import { getToday } from "@/utils/dateUtils";
 import { startOfDay, endOfDay, format } from "date-fns";
@@ -43,14 +43,96 @@ function AppContent() {
   >([]);
   const [loadingRecommendations, setLoadingRecommendations] = useState(true);
   const [priorities, setPriorities] = useState<PriorityItem[]>(defaultPriorities);
-  
+  const [lastPrioritiesJson, setLastPrioritiesJson] = useState<string>(JSON.stringify(defaultPriorities.map(p => p.id)));
+
   // MCP server for calendar operations
   const { connected, callTool, connect } = useMcpServer('google-calendar');
-  const { getEvents, fetchEvents } = useCalendar();
+  const { getEvents, fetchEvents, events: calendarEvents } = useCalendar();
 
-  // Generate AI recommendations on mount
-  useEffect(() => {
-    const generateRecommendations = async () => {
+  // Helper function to find available time slots
+  const findAvailableSlots = (
+    targetDate: Date,
+    durationMinutes: number,
+    activityTitle: string,
+    excludeEventId?: string
+  ): { time: string; label: string }[] => {
+    const slots: { time: string; label: string }[] = [];
+    const lowerActivity = activityTitle.toLowerCase();
+
+    // Define preferred time ranges based on activity type
+    let preferredRanges: { start: number; end: number; label: string }[] = [];
+
+    if (/dinner|supper|evening meal/i.test(lowerActivity)) {
+      preferredRanges = [
+        { start: 18, end: 21, label: "Evening" },
+        { start: 19, end: 22, label: "Late Evening" },
+      ];
+    } else if (/lunch|midday meal/i.test(lowerActivity)) {
+      preferredRanges = [
+        { start: 11, end: 14, label: "Midday" },
+        { start: 12, end: 15, label: "Afternoon" },
+      ];
+    } else if (/gym|workout|exercise|fitness/i.test(lowerActivity)) {
+      preferredRanges = [
+        { start: 6, end: 9, label: "Early Morning" },
+        { start: 17, end: 20, label: "Evening" },
+      ];
+    } else if (/study|homework|buffer/i.test(lowerActivity)) {
+      preferredRanges = [
+        { start: 9, end: 12, label: "Morning" },
+        { start: 14, end: 17, label: "Afternoon" },
+        { start: 19, end: 22, label: "Evening" },
+      ];
+    } else {
+      preferredRanges = [
+        { start: 9, end: 12, label: "Morning" },
+        { start: 13, end: 17, label: "Afternoon" },
+        { start: 18, end: 21, label: "Evening" },
+      ];
+    }
+
+    const targetDateStr = format(targetDate, 'yyyy-MM-dd');
+    const busySlots = calendarEvents
+      .filter(e => {
+        if (excludeEventId && e.id === excludeEventId) return false;
+        return e.startDate && format(e.startDate, 'yyyy-MM-dd') === targetDateStr;
+      })
+      .map(e => ({
+        start: e.startDate.getHours() * 60 + e.startDate.getMinutes(),
+        end: (e.endDate || e.startDate).getHours() * 60 + (e.endDate || e.startDate).getMinutes() + (e.endDate ? 0 : e.duration),
+      }));
+
+    for (const range of preferredRanges) {
+      for (let hour = range.start; hour < range.end; hour++) {
+        for (const minute of [0, 30]) {
+          const slotStart = hour * 60 + minute;
+          const slotEnd = slotStart + durationMinutes;
+          if (slotEnd > range.end * 60) continue;
+
+          const hasConflict = busySlots.some(busy =>
+            (slotStart < busy.end && slotEnd > busy.start)
+          );
+
+          if (!hasConflict) {
+            const timeStr = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+            const displayTime = format(new Date(2000, 0, 1, hour, minute), 'h:mm a');
+            slots.push({
+              time: timeStr,
+              label: `${displayTime} (${range.label})`,
+            });
+
+            if (slots.filter(s => s.label.includes(range.label)).length >= 2) break;
+          }
+        }
+        if (slots.filter(s => s.label.includes(range.label)).length >= 2) break;
+      }
+    }
+
+    return slots.slice(0, 3);
+  };
+
+  // Function to generate recommendations (extracted for reuse)
+  const generateRecommendations = async (currentPriorities: PriorityItem[]) => {
       try {
         setLoadingRecommendations(true);
         const today = getToday();
@@ -127,9 +209,16 @@ function AppContent() {
           },
         ];
 
-        // Generate AI recommendations
-        const aiRecs = await generateAIRecommendations(eventsForAI, assignments);
-        
+        // Convert priorities to format expected by AI service
+        const userPriorities: UserPriority[] = currentPriorities.map((p, index) => ({
+          id: p.id,
+          label: p.label,
+          rank: index + 1,
+        }));
+
+        // Generate AI recommendations with user priorities
+        const aiRecs = await generateAIRecommendations(eventsForAI, assignments, userPriorities);
+
         // Convert AI recommendations to suggestion format
         const formattedSuggestions = aiRecs.map((rec) => ({
           id: rec.id,
@@ -149,10 +238,57 @@ function AppContent() {
       }
     };
 
-    generateRecommendations();
-    // Only run once on mount, or when explicitly triggered
+  // Generate AI recommendations on mount
+  useEffect(() => {
+    generateRecommendations(priorities);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Empty deps to prevent infinite loops
+  }, []); // Only run once on mount
+
+  // Handle priority changes - regenerate recommendations
+  const handlePrioritiesChange = async (newPriorities: PriorityItem[]) => {
+    setPriorities(newPriorities);
+
+    // Check if priorities actually changed (by comparing IDs order)
+    const newPrioritiesJson = JSON.stringify(newPriorities.map(p => p.id));
+    if (newPrioritiesJson !== lastPrioritiesJson) {
+      setLastPrioritiesJson(newPrioritiesJson);
+
+      // Show toast that recommendations are being updated
+      toast.info("Updating recommendations based on your new priorities...");
+
+      // Regenerate recommendations with new priorities
+      await generateRecommendations(newPriorities);
+
+      toast.success("Recommendations updated!", {
+        description: `Now prioritizing: ${newPriorities[0].label} > ${newPriorities[1].label} > ${newPriorities[2].label}`,
+      });
+    }
+  };
+
+  // Handle priority changes from chatbot
+  const handleChatbotPriorityChange = async (newPriorityIds: string[]) => {
+    // Convert priority IDs to PriorityItem objects
+    const priorityLabels: Record<string, { label: string; icon: string }> = {
+      recruiting: { label: "Recruiting", icon: "💼" },
+      socials: { label: "Socials", icon: "🎉" },
+      sleep: { label: "Sleep", icon: "😴" },
+      clubs: { label: "Clubs", icon: "👥" },
+      homework: { label: "Homework", icon: "📚" },
+    };
+
+    const newPriorities: PriorityItem[] = newPriorityIds.map((id) => ({
+      id: id as PriorityItem["id"],
+      label: priorityLabels[id]?.label || id,
+      icon: priorityLabels[id]?.icon || "📌",
+    }));
+
+    // Update priorities state (this will update the UI)
+    setPriorities(newPriorities);
+    setLastPrioritiesJson(JSON.stringify(newPriorityIds));
+
+    // Regenerate recommendations with new priorities
+    await generateRecommendations(newPriorities);
+  };
 
   const handleAcceptSuggestion = async (id: string, suggestionData?: {
     assignmentId?: string;
@@ -182,6 +318,26 @@ function AppContent() {
           const endDate = new Date(startDate);
           endDate.setMinutes(endDate.getMinutes() + action.duration);
 
+          // Check for conflicts before creating
+          const eventStart = startDate.getTime();
+          const eventEnd = endDate.getTime();
+          const conflictingEvent = calendarEvents.find(existingEvent => {
+            if (!existingEvent.startDate || !existingEvent.endDate) return false;
+            const existingStart = existingEvent.startDate.getTime();
+            const existingEnd = existingEvent.endDate.getTime();
+            return (eventStart < existingEnd && eventEnd > existingStart);
+          });
+
+          if (conflictingEvent) {
+            const alternativeSlots = findAvailableSlots(startDate, action.duration, action.title);
+            let toastDescription = `Conflicts with "${conflictingEvent.title}" at ${conflictingEvent.time}.`;
+            if (alternativeSlots.length > 0) {
+              toastDescription += ` Try: ${alternativeSlots.map(s => s.label.split(' (')[0]).join(', ')}`;
+            }
+            toast.error("Time conflict detected", { description: toastDescription });
+            return;
+          }
+
           await callTool('create_event', {
             calendarId: 'primary',
             summary: action.title,
@@ -198,11 +354,33 @@ function AppContent() {
           const [hours, minutes] = action.newTime.split(':').map(Number);
           const startDate = new Date(today);
           startDate.setHours(hours, minutes, 0, 0);
-          
+
           // Default duration to 60 minutes if not specified
           const duration = action.duration || 60;
           const endDate = new Date(startDate);
           endDate.setMinutes(endDate.getMinutes() + duration);
+
+          // Check for conflicts (excluding the event being moved)
+          const eventStart = startDate.getTime();
+          const eventEnd = endDate.getTime();
+          const conflictingEvent = calendarEvents.find(existingEvent => {
+            if (existingEvent.id === action.eventId) return false;
+            if (!existingEvent.startDate || !existingEvent.endDate) return false;
+            const existingStart = existingEvent.startDate.getTime();
+            const existingEnd = existingEvent.endDate.getTime();
+            return (eventStart < existingEnd && eventEnd > existingStart);
+          });
+
+          if (conflictingEvent) {
+            const eventTitle = action.eventTitle || 'Event';
+            const alternativeSlots = findAvailableSlots(startDate, duration, eventTitle, action.eventId);
+            let toastDescription = `Conflicts with "${conflictingEvent.title}" at ${conflictingEvent.time}.`;
+            if (alternativeSlots.length > 0) {
+              toastDescription += ` Try: ${alternativeSlots.map(s => s.label.split(' (')[0]).join(', ')}`;
+            }
+            toast.error("Time conflict detected", { description: toastDescription });
+            return;
+          }
 
           await callTool('update_event', {
             calendarId: 'primary',
@@ -290,17 +468,8 @@ function AppContent() {
           </div>
 
           <div className="flex items-center gap-2">
-            <Button size="sm" variant="outline" className="relative">
-              <Bell className="w-4 h-4" />
-              {suggestions.length > 0 && (
-                <Badge className="absolute -top-1 -right-1 h-5 w-5 p-0 flex items-center justify-center bg-red-500 text-white">
-                  {suggestions.length}
-                </Badge>
-              )}
-            </Button>
-            
-            <Button 
-              size="sm" 
+            <Button
+              size="sm"
               variant="outline"
               onClick={() => setSettingsOpen(true)}
             >
@@ -328,10 +497,7 @@ function AppContent() {
           </div>
           <PriorityRanking
             priorities={priorities}
-            onPrioritiesChange={(newPriorities) => {
-              setPriorities(newPriorities);
-              // TODO: Update recommendations based on new priorities
-            }}
+            onPrioritiesChange={handlePrioritiesChange}
           />
         </div>
 
@@ -398,8 +564,9 @@ function AppContent() {
       <Toaster />
 
       {/* Hidden Nexus Chatbot (preserves all backend logic) */}
-      <NexusChatbot 
+      <NexusChatbot
         onScheduleChange={handleScheduleChange}
+        onPriorityChange={handleChatbotPriorityChange}
         isHidden={true} // Hidden - using inline ChatInputCard instead
       />
     </div>

@@ -16,6 +16,7 @@ export function useMcpServer(serverName: string) {
     callTool,
     refreshTools,
     refreshResources,
+    clearError,
   } = useMcp();
 
   const serverTools = tools.get(serverName) || [];
@@ -44,6 +45,10 @@ export function useMcpServer(serverName: string) {
     refreshResources(serverName);
   }, [serverName, refreshTools, refreshResources]);
 
+  const clear = useCallback(() => {
+    clearError(serverName);
+  }, [serverName, clearError]);
+
   return {
     tools: serverTools,
     resources: serverResources,
@@ -54,5 +59,6 @@ export function useMcpServer(serverName: string) {
     disconnect,
     callTool: call,
     refresh,
+    clearError: clear,
   };
 }

@@ -6,6 +6,9 @@
 
 const API_KEY_STORAGE_KEY = "nexus_openai_api_key";
 
+/** OpenAI Chat Completions model. gpt-5.2 is the latest and best for coding and agentic tasks (Jan 2025). */
+export const OPENAI_CHAT_MODEL = "gpt-5.2";
+
 export function getOpenAIApiKey(): string | null {
   // First, check localStorage (set via Settings UI)
   if (typeof window !== "undefined") {

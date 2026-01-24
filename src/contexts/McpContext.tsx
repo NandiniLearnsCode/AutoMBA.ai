@@ -17,6 +17,7 @@ interface McpContextValue {
   callTool: (serverName: string, toolName: string, args: Record<string, any>) => Promise<any>;
   refreshTools: (serverName: string) => Promise<void>;
   refreshResources: (serverName: string) => Promise<void>;
+  clearError: (serverName: string) => void;
 }
 
 const McpContext = createContext<McpContextValue | undefined>(undefined);
@@ -54,6 +55,10 @@ export function McpProvider({ children, servers = [] }: McpProviderProps) {
 
   const updateConnected = useCallback((serverName: string, isConnected: boolean) => {
     setConnected((prev) => new Map(prev).set(serverName, isConnected));
+  }, []);
+
+  const clearError = useCallback((serverName: string) => {
+    setErrors((prev) => new Map(prev).set(serverName, null));
   }, []);
 
   const connectServer = useCallback(async (serverName: string) => {
@@ -157,6 +162,7 @@ export function McpProvider({ children, servers = [] }: McpProviderProps) {
     callTool,
     refreshTools,
     refreshResources,
+    clearError,
   };
 
   return <McpContext.Provider value={value}>{children}</McpContext.Provider>;

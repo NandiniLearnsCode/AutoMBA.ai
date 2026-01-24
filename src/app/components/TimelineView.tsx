@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Clock, Users, BookOpen, Dumbbell, Coffee, Briefcase, GraduationCap, RefreshCw, ChevronLeft, ChevronRight, Calendar as CalendarIcon } from "lucide-react";
+import { Clock, Users, BookOpen, Dumbbell, Coffee, Briefcase, GraduationCap, RefreshCw, ChevronLeft, ChevronRight, Calendar as CalendarIcon, ExternalLink } from "lucide-react";
 import { Card } from "@/app/components/ui/card";
 import { Badge } from "@/app/components/ui/badge";
 import { Button } from "@/app/components/ui/button";
@@ -434,9 +434,18 @@ export function TimelineView({ selectedDate, onDateChange }: TimelineViewProps =
         </div>
       </div>
 
-      {(calendarError || mcpError) && (
+      {(calendarError || (mcpError && !connected)) && (
         <div className="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/20">
           <p className="text-sm text-red-600">{calendarError || mcpError}</p>
+          <a
+            href="https://automba-ai-qqyo.onrender.com/auth/url"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sm text-blue-600 hover:text-blue-800 underline inline-flex items-center gap-1 mt-2"
+          >
+            Authenticate here when error persists
+            <ExternalLink className="w-3 h-3" />
+          </a>
         </div>
       )}
 
