@@ -7,8 +7,6 @@ import { Badge } from "@/app/components/ui/badge";
 import { ScrollArea } from "@/app/components/ui/scroll-area";
 import { getToday } from "@/utils/dateUtils";
 import { startOfWeek, endOfWeek, startOfMonth, endOfMonth, startOfDay, endOfDay } from "date-fns";
-import ReactMarkdown from "react-markdown";
-import { ChatAction } from "./ChatAction";
 
 interface ChatInputCardProps {
   onScheduleChange?: (action: string, details: any) => void;
@@ -92,11 +90,8 @@ export const ChatInputCard = forwardRef<{ focus: () => void }, ChatInputCardProp
             ]);
 
             setCalendarLoaded(true);
-            
-            // Generate and show proactive recommendations when chat opens
-            if ((window as any).__nexusChatbotGenerateProactiveRecommendations) {
-              (window as any).__nexusChatbotGenerateProactiveRecommendations();
-            }
+            // Calendar is loaded and ready, but we don't automatically send suggestions
+            // User must explicitly ask for calendar analysis or suggestions
           } catch (error) {
             console.error("Error loading calendar:", error);
           }
@@ -247,62 +242,15 @@ export const ChatInputCard = forwardRef<{ focus: () => void }, ChatInputCardProp
                           </span>
                         </div>
                       </div>
-                    ) : message.type === "agent" || message.type === "auto-executed" ? (
+                    ) : message.type === "agent" ? (
                       <div className="flex gap-2">
                         <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center shrink-0">
                           <Brain className="w-4 h-4 text-white" />
                         </div>
                         <div className="max-w-[80%]">
-                          <div className={`rounded-lg p-3 ${
-                            message.type === "auto-executed" 
-                              ? "bg-green-50 border border-green-200" 
-                              : "bg-muted"
-                          }`}>
-                            <div className="text-sm prose prose-sm max-w-none dark:prose-invert">
-                              <ReactMarkdown
-                                components={{
-                                  p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-                                  ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>,
-                                  ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>,
-                                  li: ({ children }) => <li className="text-sm">{children}</li>,
-                                  strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-                                  h1: ({ children }) => <h1 className="text-base font-bold mb-2">{children}</h1>,
-                                  h2: ({ children }) => <h2 className="text-sm font-semibold mb-1.5">{children}</h2>,
-                                  h3: ({ children }) => <h3 className="text-sm font-medium mb-1">{children}</h3>,
-                                  a: ({ href, children }) => (
-                                    <a 
-                                      href={href} 
-                                      target="_blank" 
-                                      rel="noopener noreferrer"
-                                      className="text-blue-600 hover:text-blue-800 underline inline-flex items-center gap-1"
-                                    >
-                                      {children}
-                                      <ExternalLink className="w-3 h-3" />
-                                    </a>
-                                  ),
-                                }}
-                              >
-                                {message.content}
-                              </ReactMarkdown>
-                            </div>
-                            {message.type === "auto-executed" && message.action?.googleCalendarLink && (
-                              <div className="mt-2 flex items-center gap-2">
-                                <Badge className="bg-green-500 text-white text-xs">
-                                  <Check className="w-3 h-3 mr-1" />
-                                  Synced to Google
-                                </Badge>
-                                <a
-                                  href={message.action.googleCalendarLink}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
-                                >
-                                  View in Google Calendar
-                                  <ExternalLink className="w-3 h-3" />
-                                </a>
-                              </div>
-                            )}
-                            <span className="text-xs text-muted-foreground mt-2 block">
+                          <div className="rounded-lg bg-muted p-3">
+                            <p className="text-sm whitespace-pre-line">{message.content}</p>
+                            <span className="text-xs text-muted-foreground mt-1 block">
                               {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </span>
                           </div>
@@ -317,7 +265,7 @@ export const ChatInputCard = forwardRef<{ focus: () => void }, ChatInputCardProp
                         <div className="max-w-[80%] flex-1">
                           <div className="rounded-lg border-2 border-blue-500 bg-blue-500/5 p-3">
                             <div className="flex items-start gap-2 mb-2">
-                              <Badge className="bg-blue-500 text-white">
+                              <Badge className="bg-blue-500">
                                 {message.action?.type === "move" && <Clock className="w-3 h-3 mr-1" />}
                                 {message.action?.type === "cancel" && <X className="w-3 h-3 mr-1" />}
                                 {message.action?.type === "add" && <Calendar className="w-3 h-3 mr-1" />}
@@ -326,27 +274,43 @@ export const ChatInputCard = forwardRef<{ focus: () => void }, ChatInputCardProp
                                 {message.action?.type === "priority-change" ? "Update Priorities" : message.action?.type}
                               </Badge>
                             </div>
-                            <div className="text-sm prose prose-sm max-w-none dark:prose-invert mb-2">
-                              <ReactMarkdown
-                                components={{
-                                  p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-                                  ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>,
-                                  ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>,
-                                  li: ({ children }) => <li className="text-sm">{children}</li>,
-                                  strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-                                }}
-                              >
-                                {message.content}
-                              </ReactMarkdown>
-                            </div>
+                            <p className="text-sm mb-3">{message.content}</p>
                             
-                            <ChatAction
-                              onApprove={() => handleApproveAction(message.id)}
-                              onReject={() => handleRejectAction(message.id)}
-                              disabled={message.action?.status !== "pending"}
-                              approved={message.action?.status === "approved"}
-                              rejected={message.action?.status === "rejected"}
-                            />
+                            {message.action?.status === "pending" && (
+                              <div className="flex gap-2">
+                                <Button
+                                  size="sm"
+                                  onClick={() => handleApproveAction(message.id)}
+                                  className="flex-1 bg-green-500 hover:bg-green-600 text-white"
+                                >
+                                  <Check className="w-3 h-3 mr-1" />
+                                  Approve
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleRejectAction(message.id)}
+                                  className="flex-1"
+                                >
+                                  <X className="w-3 h-3 mr-1" />
+                                  Decline
+                                </Button>
+                              </div>
+                            )}
+                            
+                            {message.action?.status === "approved" && (
+                              <div className="flex items-center gap-2 text-green-600 text-sm font-semibold">
+                                <Check className="w-4 h-4" />
+                                Approved & Executed
+                              </div>
+                            )}
+                            
+                            {message.action?.status === "rejected" && (
+                              <div className="flex items-center gap-2 text-muted-foreground text-sm">
+                                <X className="w-4 h-4" />
+                                Declined
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -357,16 +321,13 @@ export const ChatInputCard = forwardRef<{ focus: () => void }, ChatInputCardProp
                 {isTyping && (
                   <div className="flex gap-2">
                     <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center shrink-0">
-                      <Brain className="w-4 h-4 text-white animate-pulse" />
+                      <Brain className="w-4 h-4 text-white" />
                     </div>
                     <div className="rounded-lg bg-muted p-3">
-                      <div className="flex items-center gap-2">
-                        <div className="flex gap-1">
-                          <span className="w-2 h-2 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: "0ms" }}></span>
-                          <span className="w-2 h-2 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: "150ms" }}></span>
-                          <span className="w-2 h-2 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: "300ms" }}></span>
-                        </div>
-                        <span className="text-xs text-muted-foreground">Analyzing schedule...</span>
+                      <div className="flex gap-1">
+                        <span className="w-2 h-2 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: "0ms" }}></span>
+                        <span className="w-2 h-2 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: "150ms" }}></span>
+                        <span className="w-2 h-2 rounded-full bg-muted-foreground/50 animate-bounce" style={{ animationDelay: "300ms" }}></span>
                       </div>
                     </div>
                   </div>
@@ -386,11 +347,10 @@ export const ChatInputCard = forwardRef<{ focus: () => void }, ChatInputCardProp
                   onKeyPress={handleKeyPress}
                   placeholder="Ask me to adjust your schedule..."
                   className="flex-1"
-                  disabled={isTyping}
                 />
                 <Button
                   onClick={handleSubmit}
-                  disabled={!inputValue.trim() || isTyping}
+                  disabled={!inputValue.trim()}
                   className="bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600"
                 >
                   <Send className="w-4 h-4" />
