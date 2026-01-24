@@ -83,6 +83,11 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, onPr
     lastUpdate?: Date;
     lastEvents?: ParsedEvent[];
     lastAction?: string;
+    pendingEvent?: {
+      title: string;
+      durationMinutes: number;
+      originalDate: Date;
+    };
   }>({}); // Maintain session state to prevent amnesia
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -918,7 +923,8 @@ ${calendarContextText}
         console.log('[Chatbot] Auto-execute ADD: using AI to extract event details...');
 
         // Use AI to extract smart event details with calendar context
-        const eventDetails = await extractEventDetailsWithAI(messageToSend, eventsArray)
+        // Pass pending event context for follow-up "schedule it at X" messages
+        const eventDetails = await extractEventDetailsWithAI(messageToSend, eventsArray, sessionState.pendingEvent)
           || parseEventDetails(messageToSend); // Fallback to basic parsing
 
         console.log('[Chatbot] Auto-execute: extracted event details:', eventDetails);
@@ -946,6 +952,16 @@ ${calendarContextText}
               eventDetails.start,
               durationMinutes
             );
+
+            // Save pending event for follow-up "schedule it at X" messages
+            setSessionState(prev => ({
+              ...prev,
+              pendingEvent: {
+                title: eventDetails.title,
+                durationMinutes: durationMinutes,
+                originalDate: eventDetails.start,
+              }
+            }));
 
             // Build suggestion message with alternatives
             let suggestionText = `I can't add "${eventDetails.title}" at ${format(eventDetails.start, 'h:mm a')} because you already have "${conflictingEvent.title}" scheduled at that time.`;
@@ -1025,6 +1041,7 @@ ${calendarContextText}
                 lastUpdate: new Date(),
                 lastEvents: updatedEvents,
                 lastAction: "add",
+                pendingEvent: undefined, // Clear pending event after successful creation
               }));
 
               // Import toast for undo functionality
@@ -1270,7 +1287,8 @@ ${calendarContextText}
   // AI-powered event extraction - uses LLM to intelligently extract event details
   const extractEventDetailsWithAI = async (
     userRequest: string,
-    calendarEvents: ParsedEvent[]
+    calendarEvents: ParsedEvent[],
+    pendingEvent?: { title: string; durationMinutes: number; originalDate: Date }
   ): Promise<{ title: string; start: Date; end: Date } | null> => {
     const apiKey = getOpenAIApiKey();
     if (!apiKey) return null;
@@ -1304,10 +1322,19 @@ ${calendarContextText}
         dayName: format(e.startDate, 'EEEE')
       }));
 
+    // Build pending event context for follow-up messages
+    const pendingEventContext = pendingEvent
+      ? `\n**IMPORTANT CONTEXT - Pending Event from Previous Conflict:**
+The user previously tried to create "${pendingEvent.title}" (duration: ${pendingEvent.durationMinutes} minutes) on ${format(pendingEvent.originalDate, 'yyyy-MM-dd')} but had a conflict.
+If the user says "schedule it at X" or "book it at X" or just specifies a time, they are referring to this pending event.
+Use the title "${pendingEvent.title}" and duration ${pendingEvent.durationMinutes} minutes.
+Only the date should default to ${format(pendingEvent.originalDate, 'yyyy-MM-dd')} unless they specify a different date.\n`
+      : '';
+
     const prompt = `Extract event details from the user's request. Return ONLY valid JSON.
 
 User request: "${userRequest}"
-
+${pendingEventContext}
 **DATE REFERENCE (use these exact dates):**
 - Today: ${todayStr} (${todayDayName})
 - Tomorrow: ${tomorrowStr}
@@ -1320,6 +1347,7 @@ ${busyTimes.length > 0 ? busyTimes.map(e => `- ${e.title} on ${e.date} (${e.dayN
 
 **Instructions:**
 1. Extract a clear, concise event TITLE (e.g., "Dinner", "Gym Session", "Study Time")
+   - **If there's a pending event context above and user says "it", "that", "schedule it", etc., use the pending event title!**
 2. Determine the DATE:
    - Use the DATE REFERENCE above to convert day names to actual dates
    - "tomorrow" = ${tomorrowStr}
@@ -1327,6 +1355,7 @@ ${busyTimes.length > 0 ? busyTimes.map(e => `- ${e.title} on ${e.date} (${e.dayN
    - If user says "Monday", "Tuesday", etc., use the corresponding date from DATE REFERENCE
    - If user specifies a specific date like "January 25" or "1/25", use that date
    - Default to today (${todayStr}) only if no date/day is mentioned
+   - **If pending event context exists and no date mentioned, use the pending event's original date**
 3. Determine the TIME (IMPORTANT - be context-aware):
    - If user specifies a time (e.g., "at 3pm", "at 15:00"), use it exactly
    - Convert 12-hour to 24-hour format (3pm = 15:00, 9am = 09:00)
@@ -1350,6 +1379,7 @@ ${busyTimes.length > 0 ? busyTimes.map(e => `- ${e.title} on ${e.date} (${e.dayN
    - Study session: 60-120 minutes
    - Meeting: 60 minutes
    - Default: 60 minutes
+   - **If pending event context exists, use the pending event's duration**
 
 Return ONLY this JSON format, no other text:
 {"title": "Event Name", "date": "YYYY-MM-DD", "time": "HH:MM", "durationMinutes": 60}`;
@@ -1873,7 +1903,8 @@ If no match found, return: {"eventIndex": null}`;
         if (message.action.type === "add" && message.action.userRequest) {
           // First try AI extraction which is smarter about understanding context
           // Then fall back to basic parsing
-          const eventDetails = await extractEventDetailsWithAI(message.action.userRequest, calendarEvents)
+          // Pass pending event context for follow-up "schedule it at X" messages
+          const eventDetails = await extractEventDetailsWithAI(message.action.userRequest, calendarEvents, sessionState.pendingEvent)
             || parseEventDetails(message.action.userRequest);
 
           if (eventDetails) {
@@ -1901,6 +1932,16 @@ If no match found, return: {"eventIndex": null}`;
                 eventDetails.start,
                 durationMinutes
               );
+
+              // Save pending event for follow-up "schedule it at X" messages
+              setSessionState(prev => ({
+                ...prev,
+                pendingEvent: {
+                  title: eventDetails.title,
+                  durationMinutes: durationMinutes,
+                  originalDate: eventDetails.start,
+                }
+              }));
 
               // Build suggestion message with alternatives
               let conflictMessage = `I can't create "${eventDetails.title}" at ${format(eventDetails.start, 'h:mm a')} because you already have "${conflictingEvent.title}" scheduled at that time.`;
@@ -1965,6 +2006,7 @@ If no match found, return: {"eventIndex": null}`;
               lastUpdate: new Date(),
               lastEvents: updatedEvents,
               lastAction: "add",
+              pendingEvent: undefined, // Clear pending event after successful creation
             }));
             
             // Refresh greeting with updated events
@@ -1996,8 +2038,8 @@ If no match found, return: {"eventIndex": null}`;
           // Handle move/reschedule
           console.log('[Chatbot] Move action - eventId:', message.action.eventId, 'userRequest:', message.action.userRequest);
 
-          // Use AI to extract new time details
-          const eventDetails = await extractEventDetailsWithAI(message.action.userRequest, calendarEvents)
+          // Use AI to extract new time details (no pending event context for moves)
+          const eventDetails = await extractEventDetailsWithAI(message.action.userRequest, calendarEvents, undefined)
             || parseEventDetails(message.action.userRequest);
 
           if (!message.action.eventId) {
