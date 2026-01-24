@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { Bot, Bell, Settings as SettingsIcon } from "lucide-react";
+import { Bot, Settings as SettingsIcon } from "lucide-react";
 import { Button } from "@/app/components/ui/button";
 import { Badge } from "@/app/components/ui/badge";
 import { Toaster } from "@/app/components/ui/sonner";
@@ -290,17 +290,8 @@ function AppContent() {
           </div>
 
           <div className="flex items-center gap-2">
-            <Button size="sm" variant="outline" className="relative">
-              <Bell className="w-4 h-4" />
-              {suggestions.length > 0 && (
-                <Badge className="absolute -top-1 -right-1 h-5 w-5 p-0 flex items-center justify-center bg-red-500 text-white">
-                  {suggestions.length}
-                </Badge>
-              )}
-            </Button>
-            
-            <Button 
-              size="sm" 
+            <Button
+              size="sm"
               variant="outline"
               onClick={() => setSettingsOpen(true)}
             >
