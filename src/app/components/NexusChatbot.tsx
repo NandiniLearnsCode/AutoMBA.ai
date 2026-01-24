@@ -8,6 +8,7 @@ import { ScrollArea } from "@/app/components/ui/scroll-area";
 import { motion, AnimatePresence } from "motion/react";
 import { getOpenAIApiKey } from "@/config/apiKey";
 import { useMcpServer } from "@/hooks/useMcpServer";
+import { healthContextService } from "@/services/healthContextService";
 import { format, startOfWeek, endOfWeek, addDays, addWeeks, addMonths, startOfDay, endOfDay, startOfMonth, endOfMonth } from "date-fns";
 import { getToday } from "@/utils/dateUtils";
 
@@ -368,17 +369,29 @@ export function NexusChatbot({ onScheduleChange, onSendMessageFromExternal, isHi
       ).join('\n')}\n\nUse this calendar information to make informed suggestions. Consider conflicts, priorities, and tradeoffs.`;
     }
 
+    // Add health context if available
+    let healthContextText = '';
+    try {
+      healthContextText = await healthContextService.getHealthPromptContext();
+      if (healthContextText) {
+        healthContextText = `\n\n${healthContextText}\n\nConsider the user's health data when making scheduling recommendations. For example, if they're not getting enough sleep or exercise, prioritize scheduling time for rest and workouts.`;
+      }
+    } catch (error) {
+      console.warn('Could not load health context:', error);
+    }
+
     const systemPrompt = `You are the Nexus Executive Agent, an AI assistant helping MBA students optimize their schedule to maximize the Triple Bottom Line: Academic Excellence, Professional Networking, and Personal Well-being.
 
 Your role is to:
 - Help users optimize their schedule based on their stated priorities
 - Consider tradeoffs when making suggestions (e.g., moving a study session might affect academic performance, but could create space for networking)
 - Analyze calendar conflicts and suggest solutions
+- Consider the user's health and wellness data when available - prioritize sleep, exercise, and recovery
 - Provide specific, actionable suggestions (e.g., "I recommend moving [Event X] from [Time A] to [Time B] to accommodate [Priority Y]")
 - When suggesting actions, explain the reasoning and tradeoffs clearly
 - Be concise, professional, and action-oriented
 
-${calendarContextText}
+${calendarContextText}${healthContextText}
 
 When suggesting actions (moving, canceling, adding events), format your response clearly so the user understands what action you're proposing and why it benefits their stated priorities.`;
 

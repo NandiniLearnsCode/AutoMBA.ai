@@ -1,9 +1,10 @@
-import { Sparkles, Target, Zap, Calendar } from "lucide-react";
-import { Card } from "@/app/components/ui/card";
+import { Sparkles, Target, Zap, Calendar, Activity, Heart } from "lucide-react";
+import { Card } from "@/app/components/ui/button";
 import { Badge } from "@/app/components/ui/badge";
 import { format, startOfDay, endOfDay } from "date-fns";
 import { getToday } from "@/utils/dateUtils";
 import { useMcpServer } from "@/hooks/useMcpServer";
+import { healthContextService } from "@/services/healthContextService";
 import { useEffect, useState } from "react";
 
 interface CalendarEvent {
@@ -24,10 +25,29 @@ interface CommandCenterProps {
 
 export function CommandCenter({ events: propEvents = [], userFocus }: CommandCenterProps) {
   const [loadedEvents, setLoadedEvents] = useState<CalendarEvent[]>([]);
+  const [healthInsights, setHealthInsights] = useState<string[]>([]);
+  const [recentActivity, setRecentActivity] = useState<string>('');
   const { connected, callTool, connect } = useMcpServer('google-calendar');
   
   // Use prop events if provided, otherwise use loaded events
   const events = propEvents.length > 0 ? propEvents : loadedEvents;
+
+  // Load health insights
+  useEffect(() => {
+    const loadHealthData = async () => {
+      try {
+        const context = await healthContextService.getHealthContext(7);
+        if (context.hasData) {
+          setHealthInsights(context.insights || []);
+          setRecentActivity(context.recentActivity || '');
+        }
+      } catch (error) {
+        console.warn('Could not load health data:', error);
+      }
+    };
+
+    loadHealthData();
+  }, []);
 
   // Load today's events from calendar
   useEffect(() => {
@@ -247,6 +267,29 @@ export function CommandCenter({ events: propEvents = [], userFocus }: CommandCen
           <p className="text-sm mb-4 leading-relaxed">
             {message}
           </p>
+          
+          {/* Health Insights Section */}
+          {healthInsights.length > 0 && (
+            <div className="bg-white/70 dark:bg-gray-800/70 rounded-lg p-3 mb-4 space-y-2">
+              <div className="flex items-center gap-2">
+                <Activity className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                <span className="text-xs font-semibold text-gray-900 dark:text-white">Health & Wellness (7 days)</span>
+              </div>
+              {recentActivity && (
+                <p className="text-xs text-gray-600 dark:text-gray-400 font-medium">
+                  {recentActivity}
+                </p>
+              )}
+              <div className="space-y-1">
+                {healthInsights.slice(0, 2).map((insight, index) => (
+                  <div key={index} className="flex items-start gap-2">
+                    <Heart className="w-3 h-3 text-red-500 mt-0.5 flex-shrink-0" />
+                    <p className="text-xs text-gray-700 dark:text-gray-300">{insight}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           
           <div className="flex items-start gap-6">
             <div className="flex items-start gap-2">

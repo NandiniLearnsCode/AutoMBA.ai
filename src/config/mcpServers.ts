@@ -40,18 +40,20 @@ export function getMcpServerConfigs(): McpServerConfig[] {
   }
 
   // Google Calendar MCP Server
-  // Uses local backend proxy server (runs on port 3000)
-  // Requires backend server to be running: npm run dev:server
+  // In production (App Engine): uses /mcp endpoint directly from server.js
+  // In development: uses Vite proxy /api/mcp-calendar/mcp -> localhost:3000/mcp
   const calendarServerUrl = import.meta.env.VITE_CALENDAR_MCP_URL || 
     (typeof window !== 'undefined' 
-      ? `${window.location.origin}/api/mcp-calendar/mcp`
+      ? (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+        ? `${window.location.origin}/api/mcp-calendar/mcp`  // Dev: use Vite proxy
+        : `${window.location.protocol}//${window.location.host}/mcp`  // Production: direct endpoint
       : 'http://localhost:5173/api/mcp-calendar/mcp');
   servers.push({
     name: 'google-calendar',
     url: calendarServerUrl,
     headers: {},
     enabled: true,
-    description: 'Google Calendar MCP - Requires backend server running on port 3000',
+    description: 'Google Calendar MCP - Backend server endpoint',
   });
 
   // Canvas MCP Server

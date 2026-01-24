@@ -7,6 +7,7 @@ import { CommandCenter } from "@/app/components/CommandCenter";
 import { AgentSuggestion } from "@/app/components/AgentSuggestion";
 import { TimelineView } from "@/app/components/TimelineView";
 import { HealthMetrics } from "@/app/components/HealthMetrics";
+import { HealthDashboard } from "@/app/components/HealthDashboard";
 import { AssignmentGrid } from "@/app/components/AssignmentGrid";
 import { NexusChatbot } from "@/app/components/NexusChatbot";
 import { ChatInputCard } from "@/app/components/ChatInputCard";
@@ -416,6 +417,9 @@ function AppContent() {
 
         {/* Canvas Assignments */}
         <AssignmentGrid />
+
+        {/* Apple Health Dashboard */}
+        <HealthDashboard />
 
         {/* Footer: Profile & Biometrics */}
         <div className="space-y-6">
