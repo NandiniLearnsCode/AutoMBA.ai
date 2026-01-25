@@ -54,26 +54,11 @@ Kaisey is an AI assistant designed specifically for MBA students. Unlike generic
 1. **Visit** [https://automba-ai-qqyo.onrender.com/](https://automba-ai-qqyo.onrender.com/)
 2. **Enter your OpenAI API key** in the Settings panel (gear icon in the top right)
    - Your API key is stored locally in your browser and never sent to our servers
-3. **Explore the demo calendar** showing sample events
+3. **Autenticate calendar** by clicking on the hyperlink that shows up on the calendar section of the app
+4. **Open Hyperlink URL** by copying the URL that shows up from the hyperlink and open it in a new tab in your browser
+5. **Login with Better MBA account** using the following credentials (username: bettermba2@gmail.com, password: starmbastudent@414)
+6. **Explore the website** showing sample events
 
-### The Main Interface
-
-The interface has three main sections:
-
-#### Left Panel - Command Center
-- **Calendar**: Click dates to view events for that day
-- **Priorities**: Drag to reorder what matters most to you
-- **Health Metrics**: (Coming soon) Integration with wellness data
-
-#### Center Panel - Timeline View
-- See your weekly schedule at a glance
-- Events are color-coded by type (classes, meetings, workouts, etc.)
-- Click events for more details
-
-#### Right Panel - Kaisey Chat
-- **Chat with Kaisey**: Type messages or use voice input
-- **AI Suggestions**: Accept or dismiss smart recommendations
-- **Quick Actions**: One-click to accept suggested schedule changes
 
 ### Talking to Kaisey
 
@@ -207,7 +192,7 @@ MCP is a protocol developed by Anthropic that allows AI assistants to securely i
 | Frontend | React 18, TypeScript, Vite |
 | Styling | TailwindCSS, Radix UI, Shadcn/ui |
 | State Management | React Context, Hooks |
-| AI/LLM | OpenAI GPT-4o-mini, text-embedding-3-small |
+| AI/LLM | OpenAI GPT-5.2, text-embedding-3-small |
 | Backend | Express.js, MCP SDK |
 | Calendar | Google Calendar API, OAuth 2.0 |
 | Animations | Motion (Framer Motion) |
@@ -300,16 +285,9 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ---
 
-## License
-
-MIT License - feel free to use this project for your own MBA journey!
-
----
-
 ## Acknowledgments
 
 - Built with love for MBA students everywhere
-- Powered by OpenAI and Anthropic's MCP protocol
 - UI components from Shadcn/ui and Radix
 
 ---
