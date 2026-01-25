@@ -680,7 +680,7 @@ ${playbookKnowledge}
             { role: "user", content: userMessage },
           ],
           temperature: 0.4, // Reduced for more factual, less creative responses
-          max_completion_tokens: 500,
+          max_completion_tokens: 800, // Increased to accommodate RAG-enhanced responses
         }),
       });
 

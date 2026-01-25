@@ -192,6 +192,7 @@ export async function initializeEmbeddings(): Promise<void> {
  * @param query - The user's message or search query
  * @param topK - Number of top results to return (default: 3)
  * @param contextHints - Optional context hints to improve search (e.g., current month, priorities)
+ * @param timeoutMs - Maximum time to wait for search (default: 5000ms)
  * @returns Array of relevant chunks sorted by relevance
  */
 export async function searchRelevantChunks(
@@ -201,10 +202,26 @@ export async function searchRelevantChunks(
     currentMonth?: number;
     priorities?: string[];
     recentEventTypes?: string[];
-  }
+  },
+  timeoutMs: number = 5000
 ): Promise<PlaybookChunk[]> {
-  // Ensure embeddings are initialized
-  await initializeEmbeddings();
+  // If embeddings not ready, try to initialize with a timeout
+  // This prevents the first query from hanging while embeddings are generated
+  if (!cachedEmbeddings) {
+    try {
+      await Promise.race([
+        initializeEmbeddings(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('RAG initialization timeout')), timeoutMs)
+        ),
+      ]);
+    } catch (error) {
+      console.warn('[RAG] Initialization timeout or error, proceeding without playbook knowledge:', error);
+      // Start initialization in background for next query
+      initializeEmbeddings().catch(e => console.warn('[RAG] Background initialization failed:', e));
+      return [];
+    }
+  }
 
   if (!cachedEmbeddings || cachedEmbeddings.length === 0) {
     console.warn('[RAG] No embeddings available, returning empty results');
